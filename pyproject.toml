@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "document-recognition"
+version = "0.1.0"
+description = "LayoutLMv3 page-boundary classification pipeline for merged PDFs."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "datasets>=2.19.0",
+  "numpy>=1.26.0",
+  "pillow>=10.0.0",
+  "pymupdf>=1.24.0",
+  "pytesseract>=0.3.10",
+  "streamlit>=1.45.0",
+  "torch>=2.2.0",
+  "torchvision>=0.17.0",
+  "transformers>=4.40.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+document-recognition = "document_recognition.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

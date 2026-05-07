@@ -1,0 +1,8 @@
+input_dir=data/Pdf
+total_pdfs=1076
+kept_pdfs=893
+unreadable_pdfs=0
+duplicate_pdfs=1
+over_max_pages_pdfs=173
+filtered_dir=artifacts/source_validation/filtered_pdfs
+manifest_path=artifacts/source_validation/source_pdf_report.csv

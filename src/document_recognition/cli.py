@@ -1,0 +1,227 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="LayoutLMv3 document boundary toolkit")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    synthetic_parser = subparsers.add_parser(
+        "generate-synthetic",
+        help="Create synthetic merged PDFs and training manifests from single-document PDFs",
+    )
+    synthetic_parser.add_argument("--input-dir", type=Path, required=True)
+    synthetic_parser.add_argument("--output-dir", type=Path, required=True)
+    synthetic_parser.add_argument("--num-merged-pdfs", type=int, required=True)
+    synthetic_parser.add_argument("--min-docs-per-merge", type=int, default=2)
+    synthetic_parser.add_argument("--max-docs-per-merge", type=int, default=5)
+    synthetic_parser.add_argument("--dpi", type=int, default=200)
+    synthetic_parser.add_argument("--seed", type=int, default=42)
+
+    train_parser = subparsers.add_parser("train", help="Train the page-label baseline")
+    train_parser.add_argument("--train-csv", type=Path, required=True)
+    train_parser.add_argument("--eval-csv", type=Path, required=True)
+    train_parser.add_argument("--output-dir", type=Path, required=True)
+    train_parser.add_argument("--pretrained-model-name", default="microsoft/layoutlmv3-base")
+    train_parser.add_argument("--learning-rate", type=float, default=2e-5)
+    train_parser.add_argument("--train-batch-size", type=int, default=2)
+    train_parser.add_argument("--eval-batch-size", type=int, default=2)
+    train_parser.add_argument("--num-train-epochs", type=int, default=5)
+    train_parser.add_argument("--max-length", type=int, default=512)
+    train_parser.add_argument("--logging-steps", type=int, default=20)
+    train_parser.add_argument("--tesseract-lang", default="eng")
+    train_parser.add_argument("--ocr-num-proc", type=int, default=1)
+
+    pairwise_train_parser = subparsers.add_parser("train-pairwise", help="Train the pairwise same-document model")
+    pairwise_train_parser.add_argument("--train-csv", type=Path, required=True)
+    pairwise_train_parser.add_argument("--eval-csv", type=Path, required=True)
+    pairwise_train_parser.add_argument("--output-dir", type=Path, required=True)
+    pairwise_train_parser.add_argument("--pretrained-model-name", default="microsoft/layoutlmv3-base")
+    pairwise_train_parser.add_argument("--learning-rate", type=float, default=2e-5)
+    pairwise_train_parser.add_argument("--train-batch-size", type=int, default=2)
+    pairwise_train_parser.add_argument("--eval-batch-size", type=int, default=2)
+    pairwise_train_parser.add_argument("--num-train-epochs", type=int, default=5)
+    pairwise_train_parser.add_argument("--max-length", type=int, default=512)
+    pairwise_train_parser.add_argument("--logging-steps", type=int, default=20)
+    pairwise_train_parser.add_argument("--tesseract-lang", default="eng")
+    pairwise_train_parser.add_argument("--ocr-num-proc", type=int, default=1)
+    pairwise_train_parser.add_argument("--classifier-dropout", type=float, default=0.1)
+
+    predict_parser = subparsers.add_parser("predict", help="Predict boundaries with the page-label baseline")
+    predict_parser.add_argument("--pdf-path", type=Path, required=True)
+    predict_parser.add_argument("--model-dir", type=Path, required=True)
+    predict_parser.add_argument("--work-dir", type=Path, required=True)
+    predict_parser.add_argument("--dpi", type=int, default=200)
+    predict_parser.add_argument("--max-length", type=int, default=512)
+    predict_parser.add_argument("--tesseract-lang", default="eng")
+    predict_parser.add_argument("--no-split-output", action="store_true")
+
+    pairwise_predict_parser = subparsers.add_parser(
+        "predict-pairwise",
+        help="Predict boundaries with the pairwise same-document model",
+    )
+    pairwise_predict_parser.add_argument("--pdf-path", type=Path, required=True)
+    pairwise_predict_parser.add_argument("--model-dir", type=Path, required=True)
+    pairwise_predict_parser.add_argument("--work-dir", type=Path, required=True)
+    pairwise_predict_parser.add_argument("--dpi", type=int, default=200)
+    pairwise_predict_parser.add_argument("--max-length", type=int, default=512)
+    pairwise_predict_parser.add_argument("--tesseract-lang", default="eng")
+    pairwise_predict_parser.add_argument("--threshold", type=float, default=0.5)
+    pairwise_predict_parser.add_argument("--no-split-output", action="store_true")
+
+    return parser
+
+
+def _run_generate_synthetic(args: argparse.Namespace) -> None:
+    from .synthetic import SyntheticDatasetConfig, create_synthetic_merged_dataset
+
+    outputs = create_synthetic_merged_dataset(
+        SyntheticDatasetConfig(
+            input_dir=args.input_dir,
+            output_dir=args.output_dir,
+            num_merged_pdfs=args.num_merged_pdfs,
+            min_docs_per_merge=args.min_docs_per_merge,
+            max_docs_per_merge=args.max_docs_per_merge,
+            dpi=args.dpi,
+            seed=args.seed,
+        )
+    )
+
+    for name, path in outputs.items():
+        print(f"{name}={path}")
+
+
+def _run_train(args: argparse.Namespace) -> None:
+    from .train import TrainConfig, train_model
+
+    config = TrainConfig(
+        train_csv=args.train_csv,
+        eval_csv=args.eval_csv,
+        output_dir=args.output_dir,
+        pretrained_model_name=args.pretrained_model_name,
+        learning_rate=args.learning_rate,
+        train_batch_size=args.train_batch_size,
+        eval_batch_size=args.eval_batch_size,
+        num_train_epochs=args.num_train_epochs,
+        max_length=args.max_length,
+        logging_steps=args.logging_steps,
+        tesseract_lang=args.tesseract_lang,
+        ocr_num_proc=args.ocr_num_proc,
+    )
+    train_model(config)
+
+
+def _run_train_pairwise(args: argparse.Namespace) -> None:
+    from .pairwise_train import PairwiseTrainConfig, train_pairwise_model
+
+    config = PairwiseTrainConfig(
+        train_csv=args.train_csv,
+        eval_csv=args.eval_csv,
+        output_dir=args.output_dir,
+        pretrained_model_name=args.pretrained_model_name,
+        learning_rate=args.learning_rate,
+        train_batch_size=args.train_batch_size,
+        eval_batch_size=args.eval_batch_size,
+        num_train_epochs=args.num_train_epochs,
+        max_length=args.max_length,
+        logging_steps=args.logging_steps,
+        tesseract_lang=args.tesseract_lang,
+        ocr_num_proc=args.ocr_num_proc,
+        classifier_dropout=args.classifier_dropout,
+    )
+    train_pairwise_model(config)
+
+
+def _run_predict(args: argparse.Namespace) -> None:
+    from .inference import predict_pdf_boundaries
+
+    result = predict_pdf_boundaries(
+        pdf_path=args.pdf_path,
+        model_dir=args.model_dir,
+        work_dir=args.work_dir,
+        dpi=args.dpi,
+        max_length=args.max_length,
+        tesseract_lang=args.tesseract_lang,
+        split_output=not args.no_split_output,
+    )
+
+    print("Predictions:")
+    for prediction in result.predictions:
+        print(f"page={prediction.page_number} label={prediction.label} confidence={prediction.confidence:.4f}")
+
+    print("\nRanges:")
+    for index, (start, end) in enumerate(result.ranges, start=1):
+        print(f"doc_{index} = pages {start}-{end}")
+
+    if result.output_pdfs:
+        print("\nSplit PDFs:")
+        for path in result.output_pdfs:
+            print(path)
+
+
+def _run_predict_pairwise(args: argparse.Namespace) -> None:
+    from .pairwise_inference import predict_pdf_boundaries_pairwise
+
+    result = predict_pdf_boundaries_pairwise(
+        pdf_path=args.pdf_path,
+        model_dir=args.model_dir,
+        work_dir=args.work_dir,
+        dpi=args.dpi,
+        max_length=args.max_length,
+        tesseract_lang=args.tesseract_lang,
+        threshold=args.threshold,
+        split_output=not args.no_split_output,
+    )
+
+    print("Pair predictions:")
+    for prediction in result.pair_predictions:
+        print(
+            "left_page="
+            f"{prediction.left_page} right_page={prediction.right_page} "
+            f"label={prediction.label} same_document_probability={prediction.same_document_probability:.4f}"
+        )
+
+    print("\nPage labels:")
+    for page_number, label in enumerate(result.page_labels, start=1):
+        print(f"page={page_number} label={label}")
+
+    print("\nRanges:")
+    for index, (start, end) in enumerate(result.ranges, start=1):
+        print(f"doc_{index} = pages {start}-{end}")
+
+    if result.output_pdfs:
+        print("\nSplit PDFs:")
+        for path in result.output_pdfs:
+            print(path)
+
+
+def main() -> None:
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    if args.command == "generate-synthetic":
+        _run_generate_synthetic(args)
+        return
+
+    if args.command == "train":
+        _run_train(args)
+        return
+
+    if args.command == "train-pairwise":
+        _run_train_pairwise(args)
+        return
+
+    if args.command == "predict":
+        _run_predict(args)
+        return
+
+    if args.command == "predict-pairwise":
+        _run_predict_pairwise(args)
+        return
+
+    raise ValueError(f"Unsupported command: {args.command}")
+
+
+if __name__ == "__main__":
+    main()
