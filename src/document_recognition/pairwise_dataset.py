@@ -8,6 +8,7 @@ from transformers import LayoutLMv3Processor
 
 from .labels import PAIR_LABEL_TO_ID
 from .ocr import ocr_page_cached
+from .processor_encoding import single_example_encoding_value
 from .training_control import check_training_control
 
 
@@ -82,14 +83,14 @@ def encode_pair_example(
     )
 
     return {
-        "left_input_ids": left_encoding["input_ids"],
-        "left_attention_mask": left_encoding["attention_mask"],
-        "left_bbox": left_encoding["bbox"],
-        "left_pixel_values": left_encoding["pixel_values"],
-        "right_input_ids": right_encoding["input_ids"],
-        "right_attention_mask": right_encoding["attention_mask"],
-        "right_bbox": right_encoding["bbox"],
-        "right_pixel_values": right_encoding["pixel_values"],
+        "left_input_ids": single_example_encoding_value(left_encoding["input_ids"]),
+        "left_attention_mask": single_example_encoding_value(left_encoding["attention_mask"]),
+        "left_bbox": single_example_encoding_value(left_encoding["bbox"]),
+        "left_pixel_values": single_example_encoding_value(left_encoding["pixel_values"]),
+        "right_input_ids": single_example_encoding_value(right_encoding["input_ids"]),
+        "right_attention_mask": single_example_encoding_value(right_encoding["attention_mask"]),
+        "right_bbox": single_example_encoding_value(right_encoding["bbox"]),
+        "right_pixel_values": single_example_encoding_value(right_encoding["pixel_values"]),
         "labels": PAIR_LABEL_TO_ID[example["label"]],
     }
 

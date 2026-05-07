@@ -8,6 +8,7 @@ from transformers import LayoutLMv3Processor
 
 from .labels import LABEL_TO_ID
 from .ocr import ocr_page
+from .processor_encoding import single_example_encoding
 from .training_control import check_training_control
 
 
@@ -71,6 +72,7 @@ def encode_example(
         padding="max_length",
         max_length=max_length,
     )
+    encoding = single_example_encoding(dict(encoding))
     encoding["labels"] = LABEL_TO_ID[example["label"]]
     return encoding
 

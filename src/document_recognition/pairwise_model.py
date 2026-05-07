@@ -74,6 +74,7 @@ class PairwiseLayoutLMv3Classifier(nn.Module):
         pixel_values: torch.Tensor,
     ) -> torch.Tensor:
         bbox = self._sanitize_bbox_tensor(bbox)
+        self._validate_bbox_tensor(bbox)
         outputs = self.backbone(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -82,14 +83,50 @@ class PairwiseLayoutLMv3Classifier(nn.Module):
         )
         return outputs.last_hidden_state[:, 0, :]
 
-    @staticmethod
-    def _sanitize_bbox_tensor(bbox: torch.Tensor) -> torch.Tensor:
-        bbox = bbox.to(dtype=torch.long).clamp(min=0, max=1000)
-        left = torch.minimum(bbox[:, :, 0], bbox[:, :, 2])
-        top = torch.minimum(bbox[:, :, 1], bbox[:, :, 3])
-        right = torch.maximum(bbox[:, :, 0], bbox[:, :, 2])
-        bottom = torch.maximum(bbox[:, :, 1], bbox[:, :, 3])
+    def _sanitize_bbox_tensor(self, bbox: torch.Tensor) -> torch.Tensor:
+        max_x = int(self.backbone.embeddings.x_position_embeddings.num_embeddings) - 1
+        max_y = int(self.backbone.embeddings.y_position_embeddings.num_embeddings) - 1
+        bbox = torch.nan_to_num(bbox, nan=0.0, posinf=0.0, neginf=0.0)
+        bbox = bbox.to(dtype=torch.long)
+        x1 = bbox[:, :, 0].clamp(min=0, max=max_x)
+        y1 = bbox[:, :, 1].clamp(min=0, max=max_y)
+        x2 = bbox[:, :, 2].clamp(min=0, max=max_x)
+        y2 = bbox[:, :, 3].clamp(min=0, max=max_y)
+
+        left = torch.minimum(x1, x2)
+        top = torch.minimum(y1, y2)
+        right = torch.maximum(x1, x2)
+        bottom = torch.maximum(y1, y2)
+
+        max_width = int(self.backbone.embeddings.w_position_embeddings.num_embeddings) - 1
+        max_height = int(self.backbone.embeddings.h_position_embeddings.num_embeddings) - 1
+        right = torch.minimum(right, left + max_width)
+        bottom = torch.minimum(bottom, top + max_height)
         return torch.stack((left, top, right, bottom), dim=-1)
+
+    def _validate_bbox_tensor(self, bbox: torch.Tensor) -> None:
+        max_x = int(self.backbone.embeddings.x_position_embeddings.num_embeddings) - 1
+        max_y = int(self.backbone.embeddings.y_position_embeddings.num_embeddings) - 1
+        min_value = int(bbox.min().detach().cpu().item())
+        max_left_right = int(bbox[:, :, [0, 2]].max().detach().cpu().item())
+        max_top_bottom = int(bbox[:, :, [1, 3]].max().detach().cpu().item())
+        max_width = int((bbox[:, :, 2] - bbox[:, :, 0]).max().detach().cpu().item())
+        max_height = int((bbox[:, :, 3] - bbox[:, :, 1]).max().detach().cpu().item())
+
+        if min_value < 0 or max_left_right > max_x or max_top_bottom > max_y:
+            raise ValueError(
+                "Invalid LayoutLMv3 bbox coordinates after sanitization: "
+                f"min={min_value}, max_x_coord={max_left_right}/{max_x}, "
+                f"max_y_coord={max_top_bottom}/{max_y}."
+            )
+
+        max_w = int(self.backbone.embeddings.w_position_embeddings.num_embeddings) - 1
+        max_h = int(self.backbone.embeddings.h_position_embeddings.num_embeddings) - 1
+        if max_width > max_w or max_height > max_h:
+            raise ValueError(
+                "Invalid LayoutLMv3 bbox size after sanitization: "
+                f"max_width={max_width}/{max_w}, max_height={max_height}/{max_h}."
+            )
 
     def forward(
         self,
