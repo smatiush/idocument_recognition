@@ -73,6 +73,7 @@ class PairwiseLayoutLMv3Classifier(nn.Module):
         bbox: torch.Tensor,
         pixel_values: torch.Tensor,
     ) -> torch.Tensor:
+        bbox = self._sanitize_bbox_tensor(bbox)
         outputs = self.backbone(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -80,6 +81,15 @@ class PairwiseLayoutLMv3Classifier(nn.Module):
             pixel_values=pixel_values,
         )
         return outputs.last_hidden_state[:, 0, :]
+
+    @staticmethod
+    def _sanitize_bbox_tensor(bbox: torch.Tensor) -> torch.Tensor:
+        bbox = bbox.to(dtype=torch.long).clamp(min=0, max=1000)
+        left = torch.minimum(bbox[:, :, 0], bbox[:, :, 2])
+        top = torch.minimum(bbox[:, :, 1], bbox[:, :, 3])
+        right = torch.maximum(bbox[:, :, 0], bbox[:, :, 2])
+        bottom = torch.maximum(bbox[:, :, 1], bbox[:, :, 3])
+        return torch.stack((left, top, right, bottom), dim=-1)
 
     def forward(
         self,
