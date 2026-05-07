@@ -3,12 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from datasets import Dataset
 from transformers import LayoutLMv3Processor
 
 from .labels import PAIR_LABEL_TO_ID
 from .ocr import ocr_page_cached
-from .processor_encoding import single_example_encoding_value
 from .training_control import check_training_control
 
 
@@ -32,6 +32,16 @@ def _sanitize_boxes(boxes: list[list[int]]) -> list[list[int]]:
             bottom = top
         sanitized.append([left, top, right, bottom])
     return sanitized
+
+
+def _single_example_encoding_value(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        if value.ndim > 0 and value.shape[0] == 1:
+            return value[0]
+        return value
+    if isinstance(value, list) and len(value) == 1:
+        return value[0]
+    return value
 
 
 def load_pair_csv_dataset(csv_path: str | Path) -> Dataset:
@@ -83,14 +93,14 @@ def encode_pair_example(
     )
 
     return {
-        "left_input_ids": single_example_encoding_value(left_encoding["input_ids"]),
-        "left_attention_mask": single_example_encoding_value(left_encoding["attention_mask"]),
-        "left_bbox": single_example_encoding_value(left_encoding["bbox"]),
-        "left_pixel_values": single_example_encoding_value(left_encoding["pixel_values"]),
-        "right_input_ids": single_example_encoding_value(right_encoding["input_ids"]),
-        "right_attention_mask": single_example_encoding_value(right_encoding["attention_mask"]),
-        "right_bbox": single_example_encoding_value(right_encoding["bbox"]),
-        "right_pixel_values": single_example_encoding_value(right_encoding["pixel_values"]),
+        "left_input_ids": _single_example_encoding_value(left_encoding["input_ids"]),
+        "left_attention_mask": _single_example_encoding_value(left_encoding["attention_mask"]),
+        "left_bbox": _single_example_encoding_value(left_encoding["bbox"]),
+        "left_pixel_values": _single_example_encoding_value(left_encoding["pixel_values"]),
+        "right_input_ids": _single_example_encoding_value(right_encoding["input_ids"]),
+        "right_attention_mask": _single_example_encoding_value(right_encoding["attention_mask"]),
+        "right_bbox": _single_example_encoding_value(right_encoding["bbox"]),
+        "right_pixel_values": _single_example_encoding_value(right_encoding["pixel_values"]),
         "labels": PAIR_LABEL_TO_ID[example["label"]],
     }
 

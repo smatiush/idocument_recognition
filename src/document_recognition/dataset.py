@@ -3,12 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from datasets import Dataset
 from transformers import LayoutLMv3Processor
 
 from .labels import LABEL_TO_ID
 from .ocr import ocr_page
-from .processor_encoding import single_example_encoding
 from .training_control import check_training_control
 
 
@@ -32,6 +32,18 @@ def _sanitize_boxes(boxes: list[list[int]]) -> list[list[int]]:
             bottom = top
         sanitized.append([left, top, right, bottom])
     return sanitized
+
+
+def _single_example_encoding(encoding: dict[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
+    for key, value in encoding.items():
+        if isinstance(value, np.ndarray):
+            normalized[key] = value[0] if value.ndim > 0 and value.shape[0] == 1 else value
+        elif isinstance(value, list) and len(value) == 1:
+            normalized[key] = value[0]
+        else:
+            normalized[key] = value
+    return normalized
 
 
 def load_csv_dataset(csv_path: str | Path) -> Dataset:
@@ -72,7 +84,7 @@ def encode_example(
         padding="max_length",
         max_length=max_length,
     )
-    encoding = single_example_encoding(dict(encoding))
+    encoding = _single_example_encoding(dict(encoding))
     encoding["labels"] = LABEL_TO_ID[example["label"]]
     return encoding
 
