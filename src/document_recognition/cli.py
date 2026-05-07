@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="LayoutLMv3 document boundary toolkit")
@@ -18,6 +20,11 @@ def _build_parser() -> argparse.ArgumentParser:
     synthetic_parser.add_argument("--max-docs-per-merge", type=int, default=5)
     synthetic_parser.add_argument("--dpi", type=int, default=200)
     synthetic_parser.add_argument("--seed", type=int, default=42)
+    synthetic_parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Do not print generation progress to stderr.",
+    )
 
     train_parser = subparsers.add_parser("train", help="Train the page-label baseline")
     train_parser.add_argument("--train-csv", type=Path, required=True)
@@ -127,6 +134,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def _run_generate_synthetic(args: argparse.Namespace) -> None:
     from .synthetic import SyntheticDatasetConfig, create_synthetic_merged_dataset
 
+    progress_callback = None if args.no_progress else _make_cli_progress_callback()
     outputs = create_synthetic_merged_dataset(
         SyntheticDatasetConfig(
             input_dir=args.input_dir,
@@ -136,11 +144,47 @@ def _run_generate_synthetic(args: argparse.Namespace) -> None:
             max_docs_per_merge=args.max_docs_per_merge,
             dpi=args.dpi,
             seed=args.seed,
-        )
+        ),
+        progress_callback=progress_callback,
     )
 
     for name, path in outputs.items():
         print(f"{name}={path}")
+
+
+def _format_eta(seconds: object) -> str:
+    if seconds is None:
+        return "eta unknown"
+
+    total_seconds = int(seconds)
+    minutes, remaining_seconds = divmod(total_seconds, 60)
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours:
+        return f"eta {hours}h {remaining_minutes}m"
+    if remaining_minutes:
+        return f"eta {remaining_minutes}m {remaining_seconds}s"
+    return f"eta {remaining_seconds}s"
+
+
+def _make_cli_progress_callback():
+    last_message = ""
+
+    def callback(event: dict[str, object]) -> None:
+        nonlocal last_message
+
+        current = int(event.get("current", 0))
+        total = int(event.get("total", 0))
+        message = str(event.get("message", "Working..."))
+        if message == last_message:
+            return
+
+        fraction = float(event.get("fraction", 0.0))
+        percent = max(0.0, min(100.0, fraction * 100.0))
+        eta = _format_eta(event.get("eta_seconds"))
+        print(f"[{current}/{total} {percent:5.1f}%] {message} ({eta})", file=sys.stderr, flush=True)
+        last_message = message
+
+    return callback
 
 
 def _run_train(args: argparse.Namespace) -> None:

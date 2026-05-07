@@ -117,9 +117,26 @@ def create_synthetic_merged_dataset_with_progress(
             merged_doc = fitz.open()
             page_records: list[dict[str, str | int]] = []
             global_page = 1
+            _emit_generation_progress(
+                progress_callback,
+                start_time=start_time,
+                current=merged_index - 1,
+                total=config.num_merged_pdfs,
+                message=f"Preparing {merged_pdf_id} with {doc_count} source PDFs",
+            )
 
             try:
                 for source_doc_index, source_doc_path in enumerate(chosen_docs, start=1):
+                    _emit_generation_progress(
+                        progress_callback,
+                        start_time=start_time,
+                        current=merged_index - 1,
+                        total=config.num_merged_pdfs,
+                        message=(
+                            f"Merging {merged_pdf_id}: source {source_doc_index}/{doc_count} "
+                            f"{source_doc_path.name}"
+                        ),
+                    )
                     with suppress_mupdf_stderr():
                         source_doc = fitz.open(source_doc_path)
                     try:
@@ -143,12 +160,26 @@ def create_synthetic_merged_dataset_with_progress(
                     finally:
                         source_doc.close()
 
+                _emit_generation_progress(
+                    progress_callback,
+                    start_time=start_time,
+                    current=merged_index - 1,
+                    total=config.num_merged_pdfs,
+                    message=f"Saving {merged_pdf_id}",
+                )
                 with suppress_mupdf_stderr():
                     merged_doc.save(merged_pdf_path)
             finally:
                 merged_doc.close()
 
             page_image_dir = images_dir / merged_pdf_id
+            _emit_generation_progress(
+                progress_callback,
+                start_time=start_time,
+                current=merged_index - 1,
+                total=config.num_merged_pdfs,
+                message=f"Rendering page images for {merged_pdf_id}",
+            )
             image_paths = pdf_to_images(merged_pdf_path, page_image_dir, dpi=config.dpi)
 
             for page_record, image_path in zip(page_records, image_paths, strict=True):
@@ -172,20 +203,13 @@ def create_synthetic_merged_dataset_with_progress(
                     }
                 )
 
-            if progress_callback is not None:
-                elapsed = max(time.time() - start_time, 1e-6)
-                rate = merged_index / elapsed if merged_index else 0.0
-                eta_seconds = int((config.num_merged_pdfs - merged_index) / rate) if rate > 0 else None
-                progress_callback(
-                    {
-                        "phase": "generate_synthetic",
-                        "current": merged_index,
-                        "total": config.num_merged_pdfs,
-                        "fraction": merged_index / config.num_merged_pdfs,
-                        "message": f"Generated merged PDF {merged_index}/{config.num_merged_pdfs}: {merged_pdf_id}",
-                        "eta_seconds": eta_seconds,
-                    }
-                )
+            _emit_generation_progress(
+                progress_callback,
+                start_time=start_time,
+                current=merged_index,
+                total=config.num_merged_pdfs,
+                message=f"Generated merged PDF {merged_index}/{config.num_merged_pdfs}: {merged_pdf_id}",
+            )
 
     outputs: dict[str, Path] = {
         "page_manifest": page_manifest_path,
@@ -223,3 +247,29 @@ def create_synthetic_merged_dataset_with_progress(
         )
 
     return outputs
+
+
+def _emit_generation_progress(
+    progress_callback: Callable[[dict[str, object]], None] | None,
+    *,
+    start_time: float,
+    current: int,
+    total: int,
+    message: str,
+) -> None:
+    if progress_callback is None:
+        return
+
+    elapsed = max(time.time() - start_time, 1e-6)
+    rate = current / elapsed if current else 0.0
+    eta_seconds = int((total - current) / rate) if rate > 0 else None
+    progress_callback(
+        {
+            "phase": "generate_synthetic",
+            "current": current,
+            "total": total,
+            "fraction": current / total,
+            "message": message,
+            "eta_seconds": eta_seconds,
+        }
+    )

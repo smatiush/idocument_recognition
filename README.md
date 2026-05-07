@@ -52,6 +52,12 @@ Run the local UI with:
 streamlit run src/document_recognition/ui.py
 ```
 
+Run it without CORS protection with:
+
+```bash
+streamlit run src/document_recognition/ui.py --server.enableCORS=false --server.enableXsrfProtection=false
+```
+
 The UI includes tabs for:
 
 - source PDF validation and filtering
