@@ -9,6 +9,7 @@ description = "LayoutLMv3 page-boundary classification pipeline for merged PDFs.
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+  "accelerate>=0.33.0,<1.0.0",
   "datasets>=2.19.0",
   "numpy>=1.26.0",
   "pillow>=10.0.0",
@@ -18,14 +19,17 @@ dependencies = [
   "scikit-learn>=1.4.0",
   "sentence-transformers>=3.0.0",
   "streamlit>=1.45.0",
-  "torch>=2.2.0",
-  "torchvision>=0.17.0",
-  "transformers>=4.40.0",
+  "torch>=2.2.0,<2.5.0",
+  "torchvision>=0.17.0,<0.20.0",
+  "transformers>=4.40.0,<4.45.0",
 ]
 
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0.0",
+]
+gpu-ocr = [
+  "easyocr>=1.7.2,<2.0.0",
 ]
 
 [project.scripts]

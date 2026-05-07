@@ -11,7 +11,7 @@ import numpy as np
 from transformers import DefaultDataCollator, LayoutLMv3Processor, Trainer, TrainerCallback, TrainingArguments
 
 from .labels import PAIR_LABEL_TO_ID
-from .ocr import ensure_tesseract_available
+from .ocr import OCREngine, ensure_tesseract_available
 from .pairwise_dataset import encode_pair_dataset, encode_pair_example, load_pair_csv_dataset
 from .pairwise_model import PairwiseLayoutLMv3Classifier
 from .training_control import TrainingStoppedError, check_training_control
@@ -37,6 +37,8 @@ class PairwiseTrainConfig:
     dataloader_num_workers: int = 0
     gradient_accumulation_steps: int = 1
     encoded_cache_dir: Path | None = None
+    ocr_engine: OCREngine = "tesseract"
+    ocr_gpu: bool = False
 
 
 @dataclass(slots=True)
@@ -51,6 +53,8 @@ class PairwiseEvalConfig:
     max_eval_rows: int | None = None
     encoded_cache_dir: Path | None = None
     control_path: Path | None = None
+    ocr_engine: OCREngine = "tesseract"
+    ocr_gpu: bool = False
 
 
 def compute_pairwise_metrics(eval_pred: tuple[np.ndarray, np.ndarray]) -> dict[str, float]:
@@ -93,6 +97,8 @@ def _encoded_eval_cache_dir(config: PairwiseEvalConfig) -> Path | None:
         "model_dir": str(config.model_dir.resolve()),
         "max_length": config.max_length,
         "tesseract_lang": config.tesseract_lang,
+        "ocr_engine": config.ocr_engine,
+        "ocr_gpu": config.ocr_gpu,
         "max_eval_rows": config.max_eval_rows,
     }
     cache_key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
@@ -113,6 +119,8 @@ def _encoded_train_cache_dir(config: PairwiseTrainConfig, split_name: str) -> Pa
         "pretrained_model_name": config.pretrained_model_name,
         "max_length": config.max_length,
         "tesseract_lang": config.tesseract_lang,
+        "ocr_engine": config.ocr_engine,
+        "ocr_gpu": config.ocr_gpu,
         "split_name": split_name,
     }
     cache_key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
@@ -137,8 +145,10 @@ def _load_or_encode_pairwise_train_dataset(
         processor=processor,
         max_length=config.max_length,
         tesseract_lang=config.tesseract_lang,
-        num_proc=config.ocr_num_proc,
+        num_proc=_effective_ocr_num_proc(config.ocr_num_proc, config.ocr_engine, config.ocr_gpu),
         control_path=config.control_path,
+        ocr_engine=config.ocr_engine,
+        ocr_gpu=config.ocr_gpu,
     )
     if cache_dir is not None:
         cache_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -180,6 +190,8 @@ def _load_or_encode_pairwise_eval_dataset(
                 processor=processor,
                 max_length=config.max_length,
                 tesseract_lang=config.tesseract_lang,
+                ocr_engine=config.ocr_engine,
+                ocr_gpu=config.ocr_gpu,
             )
         )
         if progress_callback is not None:
@@ -250,7 +262,8 @@ class PairwiseProgressTrainerCallback(TrainerCallback):
 
 
 def train_pairwise_model(config: PairwiseTrainConfig, progress_callback=None) -> Path:
-    ensure_tesseract_available(tesseract_lang=config.tesseract_lang)
+    if config.ocr_engine == "tesseract":
+        ensure_tesseract_available(tesseract_lang=config.tesseract_lang)
 
     processor = LayoutLMv3Processor.from_pretrained(
         config.pretrained_model_name,
@@ -296,8 +309,15 @@ def train_pairwise_model(config: PairwiseTrainConfig, progress_callback=None) ->
     return config.output_dir
 
 
+def _effective_ocr_num_proc(num_proc: int, ocr_engine: OCREngine, ocr_gpu: bool) -> int:
+    if ocr_engine == "easyocr" and ocr_gpu:
+        return 1
+    return num_proc
+
+
 def evaluate_pairwise_model(config: PairwiseEvalConfig, progress_callback=None) -> dict[str, float]:
-    ensure_tesseract_available(tesseract_lang=config.tesseract_lang)
+    if config.ocr_engine == "tesseract":
+        ensure_tesseract_available(tesseract_lang=config.tesseract_lang)
 
     if progress_callback is not None:
         progress_callback(

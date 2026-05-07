@@ -59,6 +59,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pairwise_train_parser.add_argument("--logging-steps", type=int, default=20)
     pairwise_train_parser.add_argument("--tesseract-lang", default="eng")
     pairwise_train_parser.add_argument("--ocr-num-proc", type=int, default=1)
+    pairwise_train_parser.add_argument("--ocr-engine", choices=["tesseract", "easyocr"], default="tesseract")
+    pairwise_train_parser.add_argument("--ocr-gpu", action="store_true")
     pairwise_train_parser.add_argument("--classifier-dropout", type=float, default=0.1)
     pairwise_train_parser.add_argument("--fp16", action="store_true")
     pairwise_train_parser.add_argument("--dataloader-num-workers", type=int, default=0)
@@ -83,6 +85,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pairwise_eval_parser.add_argument("--max-eval-rows", type=int)
     pairwise_eval_parser.add_argument("--encoded-cache-dir", type=Path)
+    pairwise_eval_parser.add_argument("--ocr-engine", choices=["tesseract", "easyocr"], default="tesseract")
+    pairwise_eval_parser.add_argument("--ocr-gpu", action="store_true")
 
     lightweight_pairwise_train_parser = subparsers.add_parser(
         "train-lightweight-pairwise",
@@ -239,6 +243,8 @@ def _run_train_pairwise(args: argparse.Namespace) -> None:
         dataloader_num_workers=args.dataloader_num_workers,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         encoded_cache_dir=args.encoded_cache_dir,
+        ocr_engine=args.ocr_engine,
+        ocr_gpu=args.ocr_gpu,
     )
     train_pairwise_model(config)
 
@@ -257,6 +263,8 @@ def _run_eval_pairwise(args: argparse.Namespace) -> None:
             ocr_num_proc=args.ocr_num_proc,
             max_eval_rows=args.max_eval_rows,
             encoded_cache_dir=args.encoded_cache_dir,
+            ocr_engine=args.ocr_engine,
+            ocr_gpu=args.ocr_gpu,
         )
     )
     print("Pairwise evaluation metrics:")

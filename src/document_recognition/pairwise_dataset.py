@@ -8,7 +8,7 @@ from datasets import Dataset
 from transformers import LayoutLMv3Processor
 
 from .labels import PAIR_LABEL_TO_ID
-from .ocr import ocr_page_cached
+from .ocr import OCREngine, ocr_page_cached
 from .training_control import check_training_control
 
 
@@ -70,10 +70,22 @@ def encode_pair_example(
     processor: LayoutLMv3Processor,
     max_length: int = 512,
     tesseract_lang: str = "eng",
+    ocr_engine: OCREngine = "tesseract",
+    ocr_gpu: bool = False,
 ) -> dict[str, Any]:
     _validate_pair_label(str(example["label"]))
-    left_page = ocr_page_cached(str(example["left_image_path"]), tesseract_lang=tesseract_lang)
-    right_page = ocr_page_cached(str(example["right_image_path"]), tesseract_lang=tesseract_lang)
+    left_page = ocr_page_cached(
+        str(example["left_image_path"]),
+        tesseract_lang=tesseract_lang,
+        ocr_engine=ocr_engine,
+        ocr_gpu=ocr_gpu,
+    )
+    right_page = ocr_page_cached(
+        str(example["right_image_path"]),
+        tesseract_lang=tesseract_lang,
+        ocr_engine=ocr_engine,
+        ocr_gpu=ocr_gpu,
+    )
 
     left_encoding = processor(
         left_page.image,
@@ -112,6 +124,8 @@ def encode_pair_dataset(
     tesseract_lang: str = "eng",
     num_proc: int | None = None,
     control_path: Path | None = None,
+    ocr_engine: OCREngine = "tesseract",
+    ocr_gpu: bool = False,
 ) -> Dataset:
     columns_to_remove = dataset.column_names
 
@@ -122,6 +136,8 @@ def encode_pair_dataset(
             processor=processor,
             max_length=max_length,
             tesseract_lang=tesseract_lang,
+            ocr_engine=ocr_engine,
+            ocr_gpu=ocr_gpu,
         )
 
     map_num_proc = num_proc if num_proc is not None and num_proc > 1 else None
