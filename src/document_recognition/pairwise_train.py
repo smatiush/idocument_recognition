@@ -107,47 +107,43 @@ def _load_or_encode_pairwise_eval_dataset(
         return dataset
 
     dataset = _limit_dataset(load_pair_csv_dataset(config.eval_csv), config.max_eval_rows)
-    if config.ocr_num_proc <= 1:
-        total = len(dataset)
-        encoded_rows = []
-        for index, example in enumerate(dataset, start=1):
-            check_training_control(config.control_path)
-            encoded_rows.append(
-                encode_pair_example(
-                    example,
-                    processor=processor,
-                    max_length=config.max_length,
-                    tesseract_lang=config.tesseract_lang,
-                )
+    total = len(dataset)
+    encoded_rows = []
+    for index, example in enumerate(dataset, start=1):
+        check_training_control(config.control_path)
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "phase": "eval_pairwise_ocr",
+                    "current": index - 1,
+                    "total": total,
+                    "fraction": 0.15 + (0.65 * (index - 1) / max(total, 1)),
+                    "message": f"Encoding eval pair {index}/{total}...",
+                    "eta_seconds": None,
+                }
             )
-            if progress_callback is not None:
-                progress_callback(
-                    {
-                        "phase": "eval_pairwise_ocr",
-                        "current": index,
-                        "total": total,
-                        "fraction": 0.15 + (0.65 * index / max(total, 1)),
-                        "message": f"Encoded eval pair {index}/{total}",
-                        "eta_seconds": None,
-                    }
-                )
+        encoded_rows.append(
+            encode_pair_example(
+                example,
+                processor=processor,
+                max_length=config.max_length,
+                tesseract_lang=config.tesseract_lang,
+            )
+        )
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "phase": "eval_pairwise_ocr",
+                    "current": index,
+                    "total": total,
+                    "fraction": 0.15 + (0.65 * index / max(total, 1)),
+                    "message": f"Encoded eval pair {index}/{total}",
+                    "eta_seconds": None,
+                }
+            )
 
-        encoded_dataset = Dataset.from_list(encoded_rows)
-        encoded_dataset.set_format("torch")
-        if cache_dir is not None:
-            cache_dir.parent.mkdir(parents=True, exist_ok=True)
-            encoded_dataset.save_to_disk(str(cache_dir))
-            encoded_dataset.set_format("torch")
-        return encoded_dataset
-
-    encoded_dataset = encode_pair_dataset(
-        dataset,
-        processor=processor,
-        max_length=config.max_length,
-        tesseract_lang=config.tesseract_lang,
-        num_proc=config.ocr_num_proc,
-        control_path=config.control_path,
-    )
+    encoded_dataset = Dataset.from_list(encoded_rows)
+    encoded_dataset.set_format("torch")
     if cache_dir is not None:
         cache_dir.parent.mkdir(parents=True, exist_ok=True)
         encoded_dataset.save_to_disk(str(cache_dir))

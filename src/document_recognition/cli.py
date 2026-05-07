@@ -58,7 +58,12 @@ def _build_parser() -> argparse.ArgumentParser:
     pairwise_eval_parser.add_argument("--eval-batch-size", type=int, default=2)
     pairwise_eval_parser.add_argument("--max-length", type=int, default=512)
     pairwise_eval_parser.add_argument("--tesseract-lang", default="eng")
-    pairwise_eval_parser.add_argument("--ocr-num-proc", type=int, default=1)
+    pairwise_eval_parser.add_argument(
+        "--ocr-num-proc",
+        type=int,
+        default=1,
+        help="Deprecated for eval; saved-model evaluation uses serial OCR to avoid Tesseract multiprocessing stalls.",
+    )
     pairwise_eval_parser.add_argument("--max-eval-rows", type=int)
     pairwise_eval_parser.add_argument("--encoded-cache-dir", type=Path)
 

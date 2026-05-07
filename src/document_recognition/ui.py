@@ -901,14 +901,8 @@ def _pairwise_eval_tab() -> None:
             value="eng",
             key="pairwise_eval_only_tesseract_lang",
         )
-        ocr_num_proc = st.number_input(
-            "OCR workers",
-            min_value=1,
-            max_value=12,
-            value=1,
-            key="pairwise_eval_only_ocr_num_proc",
-            help="Use 1 for evaluation. This avoids multiprocess Tesseract stalls and shows row-by-row progress.",
-        )
+        ocr_num_proc = 1
+        st.info("Pairwise evaluation uses serial OCR with row-by-row progress to avoid Tesseract multiprocessing stalls.")
         max_eval_rows_enabled = st.checkbox(
             "Limit eval rows",
             value=False,
@@ -944,7 +938,7 @@ def _pairwise_eval_tab() -> None:
                 eval_batch_size=int(eval_batch_size),
                 max_length=int(max_length),
                 tesseract_lang=tesseract_lang,
-                ocr_num_proc=int(ocr_num_proc),
+                ocr_num_proc=ocr_num_proc,
                 max_eval_rows=int(max_eval_rows) if max_eval_rows_enabled else None,
                 encoded_cache_dir=encoded_cache_dir,
             ),

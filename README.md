@@ -178,11 +178,11 @@ document-recognition eval-pairwise \
   --eval-csv data/synthetic/pair_labels_eval.csv \
   --model-dir artifacts/layoutlmv3-pairwise \
   --eval-batch-size 1 \
-  --max-length 512 \
-  --ocr-num-proc 8
+  --max-length 512
 ```
 
 The command prints held-out pair metrics including accuracy, boundary precision, boundary recall, and eval loss.
+Saved-model evaluation uses serial OCR to avoid Tesseract multiprocessing stalls, then caches the encoded eval dataset for faster repeated runs.
 Repeated runs reuse an encoded eval cache under the eval output directory. For a fast smoke test, add:
 
 ```bash
@@ -190,8 +190,7 @@ document-recognition eval-pairwise \
   --eval-csv data/synthetic/pair_labels_eval.csv \
   --model-dir artifacts/layoutlmv3-pairwise \
   --output-dir artifacts/layoutlmv3-pairwise/eval \
-  --max-eval-rows 50 \
-  --ocr-num-proc 1
+  --max-eval-rows 50
 ```
 
 ## Train Lightweight Pairwise Model
