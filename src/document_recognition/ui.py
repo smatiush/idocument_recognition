@@ -905,8 +905,27 @@ def _pairwise_eval_tab() -> None:
             "OCR workers",
             min_value=1,
             max_value=12,
-            value=4,
+            value=1,
             key="pairwise_eval_only_ocr_num_proc",
+            help="Use 1 for evaluation. This avoids multiprocess Tesseract stalls and shows row-by-row progress.",
+        )
+        max_eval_rows_enabled = st.checkbox(
+            "Limit eval rows",
+            value=False,
+            key="pairwise_eval_limit_rows_enabled",
+            help="Use this for a fast smoke test before running the full eval CSV.",
+        )
+        max_eval_rows = st.number_input(
+            "Maximum eval rows",
+            min_value=1,
+            value=50,
+            key="pairwise_eval_max_rows",
+            disabled=not max_eval_rows_enabled,
+        )
+        encoded_cache_dir = _path_input(
+            "Encoded cache directory",
+            "pairwise_eval_encoded_cache_dir",
+            "artifacts/layoutlmv3-pairwise/eval/encoded_eval_cache",
         )
         submitted = st.form_submit_button("Run pairwise evaluation")
 
@@ -926,6 +945,8 @@ def _pairwise_eval_tab() -> None:
                 max_length=int(max_length),
                 tesseract_lang=tesseract_lang,
                 ocr_num_proc=int(ocr_num_proc),
+                max_eval_rows=int(max_eval_rows) if max_eval_rows_enabled else None,
+                encoded_cache_dir=encoded_cache_dir,
             ),
             model_dir=model_dir,
         )

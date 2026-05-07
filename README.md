@@ -183,6 +183,16 @@ document-recognition eval-pairwise \
 ```
 
 The command prints held-out pair metrics including accuracy, boundary precision, boundary recall, and eval loss.
+Repeated runs reuse an encoded eval cache under the eval output directory. For a fast smoke test, add:
+
+```bash
+document-recognition eval-pairwise \
+  --eval-csv data/synthetic/pair_labels_eval.csv \
+  --model-dir artifacts/layoutlmv3-pairwise \
+  --output-dir artifacts/layoutlmv3-pairwise/eval \
+  --max-eval-rows 50 \
+  --ocr-num-proc 1
+```
 
 ## Train Lightweight Pairwise Model
 

@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 from pathlib import Path
 import time
 
+from datasets import Dataset, load_from_disk
 import numpy as np
 from transformers import DefaultDataCollator, LayoutLMv3Processor, Trainer, TrainerCallback, TrainingArguments
 
 from .labels import PAIR_LABEL_TO_ID
 from .ocr import ensure_tesseract_available
-from .pairwise_dataset import encode_pair_dataset, load_pair_csv_dataset
+from .pairwise_dataset import encode_pair_dataset, encode_pair_example, load_pair_csv_dataset
 from .pairwise_model import PairwiseLayoutLMv3Classifier
 from .training_control import TrainingStoppedError, check_training_control
 
@@ -41,6 +44,8 @@ class PairwiseEvalConfig:
     max_length: int = 512
     tesseract_lang: str = "eng"
     ocr_num_proc: int = 1
+    max_eval_rows: int | None = None
+    encoded_cache_dir: Path | None = None
     control_path: Path | None = None
 
 
@@ -61,6 +66,93 @@ def compute_pairwise_metrics(eval_pred: tuple[np.ndarray, np.ndarray]) -> dict[s
         "boundary_precision": precision,
         "boundary_recall": recall,
     }
+
+
+def _limit_dataset(dataset: Dataset, max_rows: int | None) -> Dataset:
+    if max_rows is None or max_rows <= 0 or max_rows >= len(dataset):
+        return dataset
+    return dataset.select(range(max_rows))
+
+
+def _encoded_eval_cache_dir(config: PairwiseEvalConfig) -> Path | None:
+    if config.encoded_cache_dir is not None:
+        return config.encoded_cache_dir
+    if config.output_dir is None:
+        return None
+
+    eval_csv = config.eval_csv.resolve()
+    stat = eval_csv.stat()
+    payload = {
+        "eval_csv": str(eval_csv),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "model_dir": str(config.model_dir.resolve()),
+        "max_length": config.max_length,
+        "tesseract_lang": config.tesseract_lang,
+        "max_eval_rows": config.max_eval_rows,
+    }
+    cache_key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    return config.output_dir / "encoded_eval_cache" / cache_key
+
+
+def _load_or_encode_pairwise_eval_dataset(
+    config: PairwiseEvalConfig,
+    processor: LayoutLMv3Processor,
+    progress_callback=None,
+) -> Dataset:
+    cache_dir = _encoded_eval_cache_dir(config)
+    if cache_dir is not None and cache_dir.exists():
+        dataset = load_from_disk(str(cache_dir))
+        dataset.set_format("torch")
+        return dataset
+
+    dataset = _limit_dataset(load_pair_csv_dataset(config.eval_csv), config.max_eval_rows)
+    if config.ocr_num_proc <= 1:
+        total = len(dataset)
+        encoded_rows = []
+        for index, example in enumerate(dataset, start=1):
+            check_training_control(config.control_path)
+            encoded_rows.append(
+                encode_pair_example(
+                    example,
+                    processor=processor,
+                    max_length=config.max_length,
+                    tesseract_lang=config.tesseract_lang,
+                )
+            )
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "phase": "eval_pairwise_ocr",
+                        "current": index,
+                        "total": total,
+                        "fraction": 0.15 + (0.65 * index / max(total, 1)),
+                        "message": f"Encoded eval pair {index}/{total}",
+                        "eta_seconds": None,
+                    }
+                )
+
+        encoded_dataset = Dataset.from_list(encoded_rows)
+        encoded_dataset.set_format("torch")
+        if cache_dir is not None:
+            cache_dir.parent.mkdir(parents=True, exist_ok=True)
+            encoded_dataset.save_to_disk(str(cache_dir))
+            encoded_dataset.set_format("torch")
+        return encoded_dataset
+
+    encoded_dataset = encode_pair_dataset(
+        dataset,
+        processor=processor,
+        max_length=config.max_length,
+        tesseract_lang=config.tesseract_lang,
+        num_proc=config.ocr_num_proc,
+        control_path=config.control_path,
+    )
+    if cache_dir is not None:
+        cache_dir.parent.mkdir(parents=True, exist_ok=True)
+        encoded_dataset.save_to_disk(str(cache_dir))
+        encoded_dataset.set_format("torch")
+    return encoded_dataset
 
 
 class PairwiseProgressTrainerCallback(TrainerCallback):
@@ -197,14 +289,7 @@ def evaluate_pairwise_model(config: PairwiseEvalConfig, progress_callback=None) 
             }
         )
 
-    eval_dataset = encode_pair_dataset(
-        load_pair_csv_dataset(config.eval_csv),
-        processor=processor,
-        max_length=config.max_length,
-        tesseract_lang=config.tesseract_lang,
-        num_proc=config.ocr_num_proc,
-        control_path=config.control_path,
-    )
+    eval_dataset = _load_or_encode_pairwise_eval_dataset(config, processor, progress_callback=progress_callback)
 
     if progress_callback is not None:
         progress_callback(

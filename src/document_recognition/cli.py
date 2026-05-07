@@ -59,6 +59,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pairwise_eval_parser.add_argument("--max-length", type=int, default=512)
     pairwise_eval_parser.add_argument("--tesseract-lang", default="eng")
     pairwise_eval_parser.add_argument("--ocr-num-proc", type=int, default=1)
+    pairwise_eval_parser.add_argument("--max-eval-rows", type=int)
+    pairwise_eval_parser.add_argument("--encoded-cache-dir", type=Path)
 
     lightweight_pairwise_train_parser = subparsers.add_parser(
         "train-lightweight-pairwise",
@@ -189,6 +191,8 @@ def _run_eval_pairwise(args: argparse.Namespace) -> None:
             max_length=args.max_length,
             tesseract_lang=args.tesseract_lang,
             ocr_num_proc=args.ocr_num_proc,
+            max_eval_rows=args.max_eval_rows,
+            encoded_cache_dir=args.encoded_cache_dir,
         )
     )
     print("Pairwise evaluation metrics:")
