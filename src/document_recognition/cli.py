@@ -48,6 +48,26 @@ def _build_parser() -> argparse.ArgumentParser:
     pairwise_train_parser.add_argument("--ocr-num-proc", type=int, default=1)
     pairwise_train_parser.add_argument("--classifier-dropout", type=float, default=0.1)
 
+    lightweight_pairwise_train_parser = subparsers.add_parser(
+        "train-lightweight-pairwise",
+        help="Train a CPU-friendly sentence-embedding pairwise boundary model",
+    )
+    lightweight_pairwise_train_parser.add_argument("--train-csv", type=Path, required=True)
+    lightweight_pairwise_train_parser.add_argument("--eval-csv", type=Path, required=True)
+    lightweight_pairwise_train_parser.add_argument("--output-dir", type=Path, required=True)
+    lightweight_pairwise_train_parser.add_argument(
+        "--embedding-model-name",
+        default="sentence-transformers/all-MiniLM-L6-v2",
+    )
+    lightweight_pairwise_train_parser.add_argument(
+        "--classifier-type",
+        choices=["logistic_regression", "random_forest"],
+        default="logistic_regression",
+    )
+    lightweight_pairwise_train_parser.add_argument("--tesseract-lang", default="eng")
+    lightweight_pairwise_train_parser.add_argument("--max-pairs", type=int)
+    lightweight_pairwise_train_parser.add_argument("--random-state", type=int, default=42)
+
     predict_parser = subparsers.add_parser("predict", help="Predict boundaries with the page-label baseline")
     predict_parser.add_argument("--pdf-path", type=Path, required=True)
     predict_parser.add_argument("--model-dir", type=Path, required=True)
@@ -69,6 +89,18 @@ def _build_parser() -> argparse.ArgumentParser:
     pairwise_predict_parser.add_argument("--tesseract-lang", default="eng")
     pairwise_predict_parser.add_argument("--threshold", type=float, default=0.5)
     pairwise_predict_parser.add_argument("--no-split-output", action="store_true")
+
+    lightweight_pairwise_predict_parser = subparsers.add_parser(
+        "predict-lightweight-pairwise",
+        help="Predict boundaries with the CPU-friendly sentence-embedding pairwise model",
+    )
+    lightweight_pairwise_predict_parser.add_argument("--pdf-path", type=Path, required=True)
+    lightweight_pairwise_predict_parser.add_argument("--model-dir", type=Path, required=True)
+    lightweight_pairwise_predict_parser.add_argument("--work-dir", type=Path, required=True)
+    lightweight_pairwise_predict_parser.add_argument("--dpi", type=int, default=200)
+    lightweight_pairwise_predict_parser.add_argument("--tesseract-lang", default=None)
+    lightweight_pairwise_predict_parser.add_argument("--threshold", type=float, default=0.7)
+    lightweight_pairwise_predict_parser.add_argument("--no-split-output", action="store_true")
 
     return parser
 
@@ -131,6 +163,24 @@ def _run_train_pairwise(args: argparse.Namespace) -> None:
         classifier_dropout=args.classifier_dropout,
     )
     train_pairwise_model(config)
+
+
+def _run_train_lightweight_pairwise(args: argparse.Namespace) -> None:
+    from .lightweight_pairwise import LightweightPairwiseTrainConfig, train_lightweight_pairwise_model
+
+    output_dir = train_lightweight_pairwise_model(
+        LightweightPairwiseTrainConfig(
+            train_csv=args.train_csv,
+            eval_csv=args.eval_csv,
+            output_dir=args.output_dir,
+            embedding_model_name=args.embedding_model_name,
+            classifier_type=args.classifier_type,
+            tesseract_lang=args.tesseract_lang,
+            max_pairs=args.max_pairs,
+            random_state=args.random_state,
+        )
+    )
+    print(f"lightweight_pairwise_model={output_dir}")
 
 
 def _run_predict(args: argparse.Namespace) -> None:
@@ -196,6 +246,43 @@ def _run_predict_pairwise(args: argparse.Namespace) -> None:
             print(path)
 
 
+def _run_predict_lightweight_pairwise(args: argparse.Namespace) -> None:
+    from .lightweight_pairwise import predict_pdf_boundaries_lightweight_pairwise
+
+    result = predict_pdf_boundaries_lightweight_pairwise(
+        pdf_path=args.pdf_path,
+        model_dir=args.model_dir,
+        work_dir=args.work_dir,
+        dpi=args.dpi,
+        tesseract_lang=args.tesseract_lang,
+        threshold=args.threshold,
+        split_output=not args.no_split_output,
+    )
+
+    print("Pair predictions:")
+    for prediction in result.pair_predictions:
+        print(
+            "left_page="
+            f"{prediction.left_page} right_page={prediction.right_page} "
+            f"label={prediction.label} "
+            f"same_document_probability={prediction.same_document_probability:.4f} "
+            f"new_document_probability={prediction.new_document_probability:.4f}"
+        )
+
+    print("\nPage labels:")
+    for page_number, label in enumerate(result.page_labels, start=1):
+        print(f"page={page_number} label={label}")
+
+    print("\nRanges:")
+    for index, (start, end) in enumerate(result.ranges, start=1):
+        print(f"doc_{index} = pages {start}-{end}")
+
+    if result.output_pdfs:
+        print("\nSplit PDFs:")
+        for path in result.output_pdfs:
+            print(path)
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
@@ -212,12 +299,20 @@ def main() -> None:
         _run_train_pairwise(args)
         return
 
+    if args.command == "train-lightweight-pairwise":
+        _run_train_lightweight_pairwise(args)
+        return
+
     if args.command == "predict":
         _run_predict(args)
         return
 
     if args.command == "predict-pairwise":
         _run_predict_pairwise(args)
+        return
+
+    if args.command == "predict-lightweight-pairwise":
+        _run_predict_lightweight_pairwise(args)
         return
 
     raise ValueError(f"Unsupported command: {args.command}")

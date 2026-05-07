@@ -59,15 +59,17 @@ The UI includes tabs for:
 - train/eval split preparation
 - page-level baseline training
 - pairwise model training
+- lightweight CPU pairwise model training
 - baseline prediction
 - pairwise prediction
+- lightweight CPU pairwise prediction
 
 The recommended flow for raw PDF collections is:
 
 1. Validate source PDFs and filter out unreadable, duplicate, or oversized files.
 2. Use the filtered output folder as input to synthetic dataset generation.
 3. Let synthetic generation create train/eval CSVs automatically.
-4. Train the pairwise or baseline model from the generated split manifests.
+4. Train the lightweight pairwise model on CPU, or train the LayoutLMv3 pairwise model on a cloud GPU.
 
 The UI shows progress bars during:
 
@@ -75,6 +77,7 @@ The UI shows progress bars during:
 - synthetic dataset generation
 - baseline training
 - pairwise training
+- lightweight pairwise training
 
 When the pipeline can measure it, the UI also shows a rough ETA.
 
@@ -116,6 +119,11 @@ The page-label model is still included as a baseline:
 - `MIDDLE_DOC`
 - `END_DOC`
 - `SINGLE_PAGE_DOC`
+
+On CPU-only or low-VRAM machines, start with the lightweight pairwise model. It
+uses Tesseract OCR, a small sentence-transformer embedding model, simple text
+features, and an sklearn classifier. Use full LayoutLMv3 fine-tuning later on a
+cloud NVIDIA GPU when you need to compare quality.
 
 ## Generate Synthetic Data
 
@@ -162,6 +170,28 @@ document-recognition train-pairwise \
   --output-dir artifacts/layoutlmv3-pairwise
 ```
 
+## Train Lightweight Pairwise Model
+
+This is the recommended local CPU path:
+
+```bash
+document-recognition train-lightweight-pairwise \
+  --train-csv data/synthetic/pair_labels_train.csv \
+  --eval-csv data/synthetic/pair_labels_eval.csv \
+  --output-dir artifacts/lightweight-pairwise
+```
+
+Useful options:
+
+```bash
+document-recognition train-lightweight-pairwise \
+  --train-csv data/synthetic/pair_labels_train.csv \
+  --eval-csv data/synthetic/pair_labels_eval.csv \
+  --output-dir artifacts/lightweight-pairwise \
+  --classifier-type random_forest \
+  --embedding-model-name sentence-transformers/all-MiniLM-L6-v2
+```
+
 ## Predict With Page Baseline
 
 ```bash
@@ -182,3 +212,16 @@ document-recognition predict-pairwise \
 ```
 
 The pairwise command prints adjacency predictions, reconstructed page labels, and final document ranges.
+
+## Predict With Lightweight Pairwise Model
+
+The threshold is the `NEW_DOCUMENT` probability threshold. Split when
+`NEW_DOCUMENT` probability is greater than or equal to the threshold.
+
+```bash
+document-recognition predict-lightweight-pairwise \
+  --pdf-path samples/merged.pdf \
+  --model-dir artifacts/lightweight-pairwise \
+  --work-dir artifacts/inference/lightweight-pairwise \
+  --threshold 0.7
+```
