@@ -44,6 +44,9 @@ def _single_example_encoding_value(value: Any) -> Any:
     return value
 
 
+PAGE_ENCODING_KEYS = ("input_ids", "attention_mask", "bbox", "pixel_values")
+
+
 def load_pair_csv_dataset(csv_path: str | Path) -> Dataset:
     dataset = Dataset.from_csv(str(csv_path))
     missing_columns = REQUIRED_PAIR_COLUMNS - set(dataset.column_names)
@@ -117,6 +120,55 @@ def encode_pair_example(
     }
 
 
+def encode_page_image(
+    image_path: str | Path,
+    processor: LayoutLMv3Processor,
+    max_length: int = 512,
+    tesseract_lang: str = "eng",
+    ocr_engine: OCREngine = "tesseract",
+    ocr_gpu: bool = False,
+) -> dict[str, Any]:
+    page = ocr_page_cached(
+        str(image_path),
+        tesseract_lang=tesseract_lang,
+        ocr_engine=ocr_engine,
+        ocr_gpu=ocr_gpu,
+    )
+    encoding = processor(
+        page.image,
+        page.words,
+        boxes=_sanitize_boxes(page.boxes),
+        truncation=True,
+        padding="max_length",
+        max_length=max_length,
+    )
+    return {
+        key: _single_example_encoding_value(encoding[key])
+        for key in PAGE_ENCODING_KEYS
+    }
+
+
+def encode_pair_example_from_page_cache(
+    example: dict[str, Any],
+    page_encodings: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    _validate_pair_label(str(example["label"]))
+    left_encoding = page_encodings[str(example["left_image_path"])]
+    right_encoding = page_encodings[str(example["right_image_path"])]
+
+    return {
+        "left_input_ids": left_encoding["input_ids"],
+        "left_attention_mask": left_encoding["attention_mask"],
+        "left_bbox": left_encoding["bbox"],
+        "left_pixel_values": left_encoding["pixel_values"],
+        "right_input_ids": right_encoding["input_ids"],
+        "right_attention_mask": right_encoding["attention_mask"],
+        "right_bbox": right_encoding["bbox"],
+        "right_pixel_values": right_encoding["pixel_values"],
+        "labels": PAIR_LABEL_TO_ID[example["label"]],
+    }
+
+
 def encode_pair_dataset(
     dataset: Dataset,
     processor: LayoutLMv3Processor,
@@ -142,5 +194,23 @@ def encode_pair_dataset(
 
     map_num_proc = num_proc if num_proc is not None and num_proc > 1 else None
     encoded = dataset.map(mapper, remove_columns=columns_to_remove, num_proc=map_num_proc)
+    encoded.set_format("torch")
+    return encoded
+
+
+def unique_pair_image_paths(dataset: Dataset) -> list[str]:
+    image_paths: set[str] = set()
+    for example in dataset:
+        image_paths.add(str(example["left_image_path"]))
+        image_paths.add(str(example["right_image_path"]))
+    return sorted(image_paths)
+
+
+def encode_pair_dataset_from_page_cache(
+    dataset: Dataset,
+    page_encodings: dict[str, dict[str, Any]],
+) -> Dataset:
+    encoded_rows = [encode_pair_example_from_page_cache(example, page_encodings) for example in dataset]
+    encoded = Dataset.from_list(encoded_rows)
     encoded.set_format("torch")
     return encoded

@@ -12,7 +12,14 @@ from transformers import DefaultDataCollator, LayoutLMv3Processor, Trainer, Trai
 
 from .labels import PAIR_LABEL_TO_ID
 from .ocr import OCREngine, ensure_tesseract_available
-from .pairwise_dataset import encode_pair_dataset, encode_pair_example, load_pair_csv_dataset
+from .pairwise_dataset import (
+    encode_page_image,
+    encode_pair_dataset,
+    encode_pair_dataset_from_page_cache,
+    encode_pair_example,
+    load_pair_csv_dataset,
+    unique_pair_image_paths,
+)
 from .pairwise_model import PairwiseLayoutLMv3Classifier
 from .training_control import TrainingStoppedError, check_training_control
 
@@ -105,6 +112,32 @@ def _encoded_eval_cache_dir(config: PairwiseEvalConfig) -> Path | None:
     return config.output_dir / "encoded_eval_cache" / cache_key
 
 
+def _eval_page_cache_dir(config: PairwiseEvalConfig) -> Path | None:
+    if config.encoded_cache_dir is not None:
+        base_dir = config.encoded_cache_dir
+    elif config.output_dir is not None:
+        base_dir = config.output_dir / "encoded_eval_cache"
+    else:
+        return None
+
+    eval_csv = config.eval_csv.resolve()
+    stat = eval_csv.stat()
+    payload = {
+        "eval_csv": str(eval_csv),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "model_dir": str(config.model_dir.resolve()),
+        "max_length": config.max_length,
+        "tesseract_lang": config.tesseract_lang,
+        "ocr_engine": config.ocr_engine,
+        "ocr_gpu": config.ocr_gpu,
+        "max_eval_rows": config.max_eval_rows,
+        "cache_kind": "eval_page_encodings",
+    }
+    cache_key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    return base_dir / "pages" / cache_key
+
+
 def _encoded_train_cache_dir(config: PairwiseTrainConfig, split_name: str) -> Path | None:
     if config.encoded_cache_dir is None:
         return None
@@ -122,6 +155,7 @@ def _encoded_train_cache_dir(config: PairwiseTrainConfig, split_name: str) -> Pa
         "ocr_engine": config.ocr_engine,
         "ocr_gpu": config.ocr_gpu,
         "split_name": split_name,
+        "cache_version": "page_cache_v1",
     }
     cache_key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
     return config.encoded_cache_dir / split_name / cache_key
@@ -140,21 +174,102 @@ def _load_or_encode_pairwise_train_dataset(
         return dataset
 
     csv_path = config.train_csv if split_name == "train" else config.eval_csv
-    dataset = encode_pair_dataset(
-        load_pair_csv_dataset(csv_path),
-        processor=processor,
-        max_length=config.max_length,
-        tesseract_lang=config.tesseract_lang,
-        num_proc=_effective_ocr_num_proc(config.ocr_num_proc, config.ocr_engine, config.ocr_gpu),
-        control_path=config.control_path,
-        ocr_engine=config.ocr_engine,
-        ocr_gpu=config.ocr_gpu,
-    )
+    pair_dataset = load_pair_csv_dataset(csv_path)
+    if config.encoded_cache_dir is not None:
+        page_encodings = _load_or_encode_page_cache(
+            pair_dataset,
+            config=config,
+            processor=processor,
+            split_name=split_name,
+        )
+        dataset = encode_pair_dataset_from_page_cache(pair_dataset, page_encodings)
+    else:
+        dataset = encode_pair_dataset(
+            pair_dataset,
+            processor=processor,
+            max_length=config.max_length,
+            tesseract_lang=config.tesseract_lang,
+            num_proc=_effective_ocr_num_proc(config.ocr_num_proc, config.ocr_engine, config.ocr_gpu),
+            control_path=config.control_path,
+            ocr_engine=config.ocr_engine,
+            ocr_gpu=config.ocr_gpu,
+        )
     if cache_dir is not None:
         cache_dir.parent.mkdir(parents=True, exist_ok=True)
         dataset.save_to_disk(str(cache_dir))
         dataset.set_format("torch")
     return dataset
+
+
+def _page_cache_dir(config: PairwiseTrainConfig, split_name: str) -> Path:
+    if config.encoded_cache_dir is None:
+        raise ValueError("encoded_cache_dir is required for page cache")
+
+    csv_path = config.train_csv if split_name == "train" else config.eval_csv
+    resolved_csv = csv_path.resolve()
+    stat = resolved_csv.stat()
+    payload = {
+        "csv": str(resolved_csv),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "pretrained_model_name": config.pretrained_model_name,
+        "max_length": config.max_length,
+        "tesseract_lang": config.tesseract_lang,
+        "ocr_engine": config.ocr_engine,
+        "ocr_gpu": config.ocr_gpu,
+        "split_name": split_name,
+        "cache_kind": "page_encodings",
+    }
+    cache_key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    return config.encoded_cache_dir / "pages" / split_name / cache_key
+
+
+def _load_or_encode_page_cache(
+    pair_dataset: Dataset,
+    *,
+    config: PairwiseTrainConfig,
+    processor: LayoutLMv3Processor,
+    split_name: str,
+) -> dict[str, dict[str, object]]:
+    cache_dir = _page_cache_dir(config, split_name)
+    if cache_dir.exists():
+        return _page_dataset_to_lookup(load_from_disk(str(cache_dir)))
+
+    image_paths = unique_pair_image_paths(pair_dataset)
+    page_dataset = Dataset.from_dict({"image_path": image_paths})
+
+    def mapper(example: dict[str, object]) -> dict[str, object]:
+        check_training_control(config.control_path)
+        encoding = encode_page_image(
+            str(example["image_path"]),
+            processor=processor,
+            max_length=config.max_length,
+            tesseract_lang=config.tesseract_lang,
+            ocr_engine=config.ocr_engine,
+            ocr_gpu=config.ocr_gpu,
+        )
+        return {"image_path": str(example["image_path"]), **encoding}
+
+    encoded_pages = page_dataset.map(
+        mapper,
+        num_proc=_map_num_proc(_effective_ocr_num_proc(config.ocr_num_proc, config.ocr_engine, config.ocr_gpu)),
+    )
+    cache_dir.parent.mkdir(parents=True, exist_ok=True)
+    encoded_pages.save_to_disk(str(cache_dir))
+    return _page_dataset_to_lookup(encoded_pages)
+
+
+def _page_dataset_to_lookup(page_dataset: Dataset) -> dict[str, dict[str, object]]:
+    page_encodings: dict[str, dict[str, object]] = {}
+    for row in page_dataset:
+        image_path = str(row["image_path"])
+        page_encodings[image_path] = {
+            "input_ids": row["input_ids"],
+            "attention_mask": row["attention_mask"],
+            "bbox": row["bbox"],
+            "pixel_values": row["pixel_values"],
+        }
+    return page_encodings
 
 
 def _load_or_encode_pairwise_eval_dataset(
@@ -169,50 +284,67 @@ def _load_or_encode_pairwise_eval_dataset(
         return dataset
 
     dataset = _limit_dataset(load_pair_csv_dataset(config.eval_csv), config.max_eval_rows)
-    total = len(dataset)
-    encoded_rows = []
-    for index, example in enumerate(dataset, start=1):
-        check_training_control(config.control_path)
-        if progress_callback is not None:
-            progress_callback(
-                {
-                    "phase": "eval_pairwise_ocr",
-                    "current": index - 1,
-                    "total": total,
-                    "fraction": 0.15 + (0.65 * (index - 1) / max(total, 1)),
-                    "message": f"Encoding eval pair {index}/{total}...",
-                    "eta_seconds": None,
-                }
+    page_cache_dir = _eval_page_cache_dir(config)
+    if page_cache_dir is not None:
+        page_encodings = _load_or_encode_eval_page_cache(dataset, config=config, processor=processor)
+        encoded_dataset = encode_pair_dataset_from_page_cache(dataset, page_encodings)
+    else:
+        encoded_rows = []
+        for example in dataset:
+            check_training_control(config.control_path)
+            encoded_rows.append(
+                encode_pair_example(
+                    example,
+                    processor=processor,
+                    max_length=config.max_length,
+                    tesseract_lang=config.tesseract_lang,
+                    ocr_engine=config.ocr_engine,
+                    ocr_gpu=config.ocr_gpu,
+                )
             )
-        encoded_rows.append(
-            encode_pair_example(
-                example,
-                processor=processor,
-                max_length=config.max_length,
-                tesseract_lang=config.tesseract_lang,
-                ocr_engine=config.ocr_engine,
-                ocr_gpu=config.ocr_gpu,
-            )
-        )
-        if progress_callback is not None:
-            progress_callback(
-                {
-                    "phase": "eval_pairwise_ocr",
-                    "current": index,
-                    "total": total,
-                    "fraction": 0.15 + (0.65 * index / max(total, 1)),
-                    "message": f"Encoded eval pair {index}/{total}",
-                    "eta_seconds": None,
-                }
-            )
-
-    encoded_dataset = Dataset.from_list(encoded_rows)
+        encoded_dataset = Dataset.from_list(encoded_rows)
     encoded_dataset.set_format("torch")
     if cache_dir is not None:
         cache_dir.parent.mkdir(parents=True, exist_ok=True)
         encoded_dataset.save_to_disk(str(cache_dir))
         encoded_dataset.set_format("torch")
     return encoded_dataset
+
+
+def _load_or_encode_eval_page_cache(
+    pair_dataset: Dataset,
+    *,
+    config: PairwiseEvalConfig,
+    processor: LayoutLMv3Processor,
+) -> dict[str, dict[str, object]]:
+    cache_dir = _eval_page_cache_dir(config)
+    if cache_dir is None:
+        raise ValueError("eval page cache requires encoded_cache_dir or output_dir")
+    if cache_dir.exists():
+        return _page_dataset_to_lookup(load_from_disk(str(cache_dir)))
+
+    image_paths = unique_pair_image_paths(pair_dataset)
+    page_dataset = Dataset.from_dict({"image_path": image_paths})
+
+    def mapper(example: dict[str, object]) -> dict[str, object]:
+        check_training_control(config.control_path)
+        encoding = encode_page_image(
+            str(example["image_path"]),
+            processor=processor,
+            max_length=config.max_length,
+            tesseract_lang=config.tesseract_lang,
+            ocr_engine=config.ocr_engine,
+            ocr_gpu=config.ocr_gpu,
+        )
+        return {"image_path": str(example["image_path"]), **encoding}
+
+    encoded_pages = page_dataset.map(
+        mapper,
+        num_proc=_map_num_proc(_effective_ocr_num_proc(config.ocr_num_proc, config.ocr_engine, config.ocr_gpu)),
+    )
+    cache_dir.parent.mkdir(parents=True, exist_ok=True)
+    encoded_pages.save_to_disk(str(cache_dir))
+    return _page_dataset_to_lookup(encoded_pages)
 
 
 class PairwiseProgressTrainerCallback(TrainerCallback):
@@ -313,6 +445,10 @@ def _effective_ocr_num_proc(num_proc: int, ocr_engine: OCREngine, ocr_gpu: bool)
     if ocr_engine == "easyocr" and ocr_gpu:
         return 1
     return num_proc
+
+
+def _map_num_proc(num_proc: int) -> int | None:
+    return num_proc if num_proc > 1 else None
 
 
 def evaluate_pairwise_model(config: PairwiseEvalConfig, progress_callback=None) -> dict[str, float]:

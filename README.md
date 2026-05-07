@@ -178,6 +178,43 @@ document-recognition train-pairwise \
   --output-dir artifacts/layoutlmv3-pairwise
 ```
 
+For faster GPU training on a CUDA machine, use mixed precision, cache encoded datasets, and parallelize the default Tesseract OCR preprocessing:
+
+```bash
+document-recognition train-pairwise \
+  --train-csv data/synthetic/pair_labels_train.csv \
+  --eval-csv data/synthetic/pair_labels_eval.csv \
+  --output-dir artifacts/layoutlmv3-pairwise \
+  --train-batch-size 4 \
+  --eval-batch-size 4 \
+  --ocr-num-proc 12 \
+  --fp16 \
+  --dataloader-num-workers 4 \
+  --encoded-cache-dir artifacts/encoded_pairwise_cache
+```
+
+Tesseract OCR runs on CPU, so GPU usage starts after the `Map` preprocessing phase. To try GPU OCR instead, install the optional EasyOCR extra and switch OCR engines:
+
+When `--encoded-cache-dir` is set, pairwise training first caches one encoded record per unique page image, then builds pair examples from the cached left/right page encodings. This avoids running OCR twice for every pair row and makes repeat runs much faster without changing pair labels or evaluation semantics.
+
+```bash
+pip install -e ".[gpu-ocr]"
+
+document-recognition train-pairwise \
+  --train-csv data/synthetic/pair_labels_train.csv \
+  --eval-csv data/synthetic/pair_labels_eval.csv \
+  --output-dir artifacts/layoutlmv3-pairwise \
+  --train-batch-size 4 \
+  --eval-batch-size 4 \
+  --ocr-engine easyocr \
+  --ocr-gpu \
+  --fp16 \
+  --dataloader-num-workers 4 \
+  --encoded-cache-dir artifacts/encoded_pairwise_cache_easyocr
+```
+
+Do not combine EasyOCR GPU with high `--ocr-num-proc` values; the training code keeps GPU OCR single-process so multiple workers do not load competing OCR models onto the same GPU.
+
 ## Evaluate Pairwise Model
 
 ```bash
