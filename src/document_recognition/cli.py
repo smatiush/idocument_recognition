@@ -21,6 +21,12 @@ def _build_parser() -> argparse.ArgumentParser:
     synthetic_parser.add_argument("--dpi", type=int, default=200)
     synthetic_parser.add_argument("--seed", type=int, default=42)
     synthetic_parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=1,
+        help="Number of worker processes for synthetic PDF generation.",
+    )
+    synthetic_parser.add_argument(
         "--no-progress",
         action="store_true",
         help="Do not print generation progress to stderr.",
@@ -144,6 +150,7 @@ def _run_generate_synthetic(args: argparse.Namespace) -> None:
             max_docs_per_merge=args.max_docs_per_merge,
             dpi=args.dpi,
             seed=args.seed,
+            num_workers=args.num_workers,
         ),
         progress_callback=progress_callback,
     )
