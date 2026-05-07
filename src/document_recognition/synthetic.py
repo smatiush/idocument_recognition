@@ -11,6 +11,7 @@ import fitz
 
 from .dataset_split import SplitManifestConfig, split_manifest_csv
 from .labels import PageLabel, PairLabel
+from .mupdf_warnings import suppress_mupdf_stderr
 from .pdf import pdf_to_images
 
 
@@ -117,29 +118,35 @@ def create_synthetic_merged_dataset_with_progress(
             page_records: list[dict[str, str | int]] = []
             global_page = 1
 
-            for source_doc_index, source_doc_path in enumerate(chosen_docs, start=1):
-                source_doc = fitz.open(source_doc_path)
-                merged_doc.insert_pdf(source_doc)
-                labels = _page_labels_for_document(source_doc.page_count)
+            try:
+                for source_doc_index, source_doc_path in enumerate(chosen_docs, start=1):
+                    with suppress_mupdf_stderr():
+                        source_doc = fitz.open(source_doc_path)
+                    try:
+                        with suppress_mupdf_stderr():
+                            merged_doc.insert_pdf(source_doc)
+                        labels = _page_labels_for_document(source_doc.page_count)
 
-                for source_page_in_doc, label in enumerate(labels, start=1):
-                    page_records.append(
-                        {
-                            "merged_pdf_id": merged_pdf_id,
-                            "merged_pdf_path": str(merged_pdf_path),
-                            "page": global_page,
-                            "label": label,
-                            "source_doc_path": str(source_doc_path),
-                            "source_doc_index": source_doc_index,
-                            "source_page_in_doc": source_page_in_doc,
-                        }
-                    )
-                    global_page += 1
+                        for source_page_in_doc, label in enumerate(labels, start=1):
+                            page_records.append(
+                                {
+                                    "merged_pdf_id": merged_pdf_id,
+                                    "merged_pdf_path": str(merged_pdf_path),
+                                    "page": global_page,
+                                    "label": label,
+                                    "source_doc_path": str(source_doc_path),
+                                    "source_doc_index": source_doc_index,
+                                    "source_page_in_doc": source_page_in_doc,
+                                }
+                            )
+                            global_page += 1
+                    finally:
+                        source_doc.close()
 
-                source_doc.close()
-
-            merged_doc.save(merged_pdf_path)
-            merged_doc.close()
+                with suppress_mupdf_stderr():
+                    merged_doc.save(merged_pdf_path)
+            finally:
+                merged_doc.close()
 
             page_image_dir = images_dir / merged_pdf_id
             image_paths = pdf_to_images(merged_pdf_path, page_image_dir, dpi=config.dpi)

@@ -10,6 +10,8 @@ import time
 
 import fitz
 
+from .mupdf_warnings import suppress_mupdf_stderr
+
 
 @dataclass(slots=True)
 class SourcePdfRecord:
@@ -47,9 +49,12 @@ def _file_sha1(path: Path, chunk_size: int = 1024 * 1024) -> str:
 
 def _inspect_pdf(path: Path) -> tuple[int | None, bool, str]:
     try:
-        doc = fitz.open(path)
-        page_count = doc.page_count
-        doc.close()
+        with suppress_mupdf_stderr():
+            doc = fitz.open(path)
+        try:
+            page_count = doc.page_count
+        finally:
+            doc.close()
         return page_count, True, ""
     except Exception as exc:
         return None, False, str(exc)
