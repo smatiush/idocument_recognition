@@ -57,7 +57,12 @@ def _read_ocr_cache(cache_path: Path, image: Image.Image) -> OCRPage | None:
     if not isinstance(words, list) or not isinstance(boxes, list) or not isinstance(text, str):
         return None
 
-    return OCRPage(image=image, words=[str(word) for word in words], boxes=boxes, text=text)
+    return OCRPage(
+        image=image,
+        words=[str(word) for word in words],
+        boxes=[_sanitize_box(box) for box in boxes],
+        text=text,
+    )
 
 
 def _write_ocr_cache(cache_path: Path, words: list[str], boxes: list[list[int]], text: str) -> None:
@@ -112,12 +117,36 @@ def ensure_tesseract_available(tesseract_lang: str = "eng") -> None:
         )
 
 
+def _clamp_layout_coordinate(value: int) -> int:
+    return max(0, min(int(value), 1000))
+
+
+def _sanitize_box(box: list[int]) -> list[int]:
+    if len(box) != 4:
+        return [0, 0, 0, 0]
+
+    left = _clamp_layout_coordinate(box[0])
+    top = _clamp_layout_coordinate(box[1])
+    right = _clamp_layout_coordinate(box[2])
+    bottom = _clamp_layout_coordinate(box[3])
+
+    if right < left:
+        right = left
+    if bottom < top:
+        bottom = top
+
+    return [left, top, right, bottom]
+
+
 def _normalize_box(x: int, y: int, w: int, h: int, width: int, height: int) -> list[int]:
+    if width <= 0 or height <= 0:
+        return [0, 0, 0, 0]
+
     left = int(1000 * x / width)
     top = int(1000 * y / height)
     right = int(1000 * (x + w) / width)
     bottom = int(1000 * (y + h) / height)
-    return [left, top, right, bottom]
+    return _sanitize_box([left, top, right, bottom])
 
 
 def ocr_page(image_path: str | Path, tesseract_lang: str = "eng") -> OCRPage:

@@ -14,6 +14,25 @@ from .training_control import check_training_control
 REQUIRED_PAGE_COLUMNS = {"image_path", "label"}
 
 
+def _sanitize_boxes(boxes: list[list[int]]) -> list[list[int]]:
+    sanitized: list[list[int]] = []
+    for box in boxes:
+        if len(box) != 4:
+            sanitized.append([0, 0, 0, 0])
+            continue
+
+        left = max(0, min(int(box[0]), 1000))
+        top = max(0, min(int(box[1]), 1000))
+        right = max(0, min(int(box[2]), 1000))
+        bottom = max(0, min(int(box[3]), 1000))
+        if right < left:
+            right = left
+        if bottom < top:
+            bottom = top
+        sanitized.append([left, top, right, bottom])
+    return sanitized
+
+
 def load_csv_dataset(csv_path: str | Path) -> Dataset:
     dataset = Dataset.from_csv(str(csv_path))
     missing_columns = REQUIRED_PAGE_COLUMNS - set(dataset.column_names)
@@ -47,7 +66,7 @@ def encode_example(
     encoding = processor(
         page.image,
         page.words,
-        boxes=page.boxes,
+        boxes=_sanitize_boxes(page.boxes),
         truncation=True,
         padding="max_length",
         max_length=max_length,

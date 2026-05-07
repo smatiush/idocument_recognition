@@ -14,6 +14,25 @@ from .training_control import check_training_control
 REQUIRED_PAIR_COLUMNS = {"left_image_path", "right_image_path", "label"}
 
 
+def _sanitize_boxes(boxes: list[list[int]]) -> list[list[int]]:
+    sanitized: list[list[int]] = []
+    for box in boxes:
+        if len(box) != 4:
+            sanitized.append([0, 0, 0, 0])
+            continue
+
+        left = max(0, min(int(box[0]), 1000))
+        top = max(0, min(int(box[1]), 1000))
+        right = max(0, min(int(box[2]), 1000))
+        bottom = max(0, min(int(box[3]), 1000))
+        if right < left:
+            right = left
+        if bottom < top:
+            bottom = top
+        sanitized.append([left, top, right, bottom])
+    return sanitized
+
+
 def load_pair_csv_dataset(csv_path: str | Path) -> Dataset:
     dataset = Dataset.from_csv(str(csv_path))
     missing_columns = REQUIRED_PAIR_COLUMNS - set(dataset.column_names)
@@ -48,7 +67,7 @@ def encode_pair_example(
     left_encoding = processor(
         left_page.image,
         left_page.words,
-        boxes=left_page.boxes,
+        boxes=_sanitize_boxes(left_page.boxes),
         truncation=True,
         padding="max_length",
         max_length=max_length,
@@ -56,7 +75,7 @@ def encode_pair_example(
     right_encoding = processor(
         right_page.image,
         right_page.words,
-        boxes=right_page.boxes,
+        boxes=_sanitize_boxes(right_page.boxes),
         truncation=True,
         padding="max_length",
         max_length=max_length,
