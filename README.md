@@ -60,6 +60,7 @@ The UI includes tabs for:
 - page-level baseline training
 - pairwise model training
 - lightweight CPU pairwise model training
+- saved pairwise model evaluation
 - baseline prediction
 - pairwise prediction
 - lightweight CPU pairwise prediction
@@ -169,6 +170,19 @@ document-recognition train-pairwise \
   --eval-csv data/synthetic/pair_labels_eval.csv \
   --output-dir artifacts/layoutlmv3-pairwise
 ```
+
+## Evaluate Pairwise Model
+
+```bash
+document-recognition eval-pairwise \
+  --eval-csv data/synthetic/pair_labels_eval.csv \
+  --model-dir artifacts/layoutlmv3-pairwise \
+  --eval-batch-size 1 \
+  --max-length 512 \
+  --ocr-num-proc 8
+```
+
+The command prints held-out pair metrics including accuracy, boundary precision, boundary recall, and eval loss.
 
 ## Train Lightweight Pairwise Model
 

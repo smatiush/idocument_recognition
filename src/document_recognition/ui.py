@@ -20,7 +20,12 @@ from document_recognition.lightweight_pairwise import (
 )
 from document_recognition.ocr import OCREnvironmentError
 from document_recognition.pairwise_inference import predict_pdf_boundaries_pairwise
-from document_recognition.pairwise_train import PairwiseTrainConfig, train_pairwise_model
+from document_recognition.pairwise_train import (
+    PairwiseEvalConfig,
+    PairwiseTrainConfig,
+    evaluate_pairwise_model,
+    train_pairwise_model,
+)
 from document_recognition.source_validation import SourceValidationConfig, validate_source_pdfs
 from document_recognition.synthetic import SyntheticDatasetConfig, create_synthetic_merged_dataset
 from document_recognition.train import TrainConfig, train_model
@@ -42,6 +47,7 @@ class TrainingJob:
         self.fraction = 0.0
         self.eta_seconds = None
         self.error = ""
+        self.result = None
         self.logs: list[str] = ["Starting job..."]
         self.thread: threading.Thread | None = None
 
@@ -81,6 +87,10 @@ class TrainingJob:
             self.message = message
             self._append_log_locked(f"[failed] {message}")
 
+    def set_result(self, result) -> None:
+        with self.lock:
+            self.result = _stringify_paths(result)
+
     def snapshot(self) -> dict[str, object]:
         with self.lock:
             return {
@@ -92,6 +102,7 @@ class TrainingJob:
                 "fraction": self.fraction,
                 "eta_seconds": self.eta_seconds,
                 "error": self.error,
+                "result": self.result,
                 "logs": list(self.logs),
                 "alive": self.thread.is_alive() if self.thread is not None else False,
             }
@@ -166,6 +177,11 @@ def _render_pairwise_prediction_result(data: dict[str, object]) -> None:
     st.write("Document ranges")
     _render_ranges(data["ranges"])
     _render_split_paths(data["output_pdfs"])
+
+
+def _render_pairwise_eval_result(data: dict[str, object]) -> None:
+    st.write("Metrics")
+    st.write(data)
 
 
 def _format_eta(eta_seconds: object) -> str:
@@ -318,6 +334,37 @@ def _start_pairwise_training_job(config: PairwiseTrainConfig, output_dir: Path) 
     thread = threading.Thread(target=target, daemon=True)
     job.thread = thread
     st.session_state["pairwise_train_job"] = job
+    thread.start()
+    return job
+
+
+def _start_pairwise_evaluation_job(config: PairwiseEvalConfig, model_dir: Path) -> TrainingJob:
+    control_path = _new_control_path("pairwise_eval")
+    write_training_control(control_path, "running")
+    config.control_path = control_path
+    job = TrainingJob("Pairwise evaluation", control_path=control_path, output_dir=model_dir)
+
+    def target() -> None:
+        try:
+            job.append_log("Loading saved LayoutLMv3 pairwise model...")
+            job.append_log("OCR and dataset encoding will run before metric calculation.")
+            metrics = evaluate_pairwise_model(config, progress_callback=_make_job_progress_callback(job))
+            job.set_result(metrics)
+        except TrainingStoppedError as exc:
+            job.set_status("stopped", str(exc))
+            return
+        except (OCREnvironmentError, ValueError) as exc:
+            job.set_error(str(exc))
+            return
+        except Exception as exc:
+            job.set_error(f"{type(exc).__name__}: {exc}")
+            return
+
+        job.set_status("completed", "Pairwise evaluation complete.", fraction=1.0)
+
+    thread = threading.Thread(target=target, daemon=True)
+    job.thread = thread
+    st.session_state["pairwise_eval_job"] = job
     thread.start()
     return job
 
@@ -827,6 +874,76 @@ def _lightweight_pairwise_train_tab() -> None:
         )
 
 
+def _pairwise_eval_tab() -> None:
+    st.subheader("Pairwise Evaluation")
+    st.caption("Evaluate a saved LayoutLMv3 pairwise model on a held-out pair-label CSV.")
+
+    with st.form("pairwise_eval_form"):
+        eval_csv = _path_input("Eval CSV", "pairwise_eval_only_csv", "data/synthetic/pair_labels_eval.csv")
+        model_dir = _path_input("Model directory", "pairwise_eval_model_dir", "artifacts/layoutlmv3-pairwise")
+        output_dir = _path_input("Output directory", "pairwise_eval_output_dir", "artifacts/layoutlmv3-pairwise/eval")
+        eval_batch_size = st.number_input(
+            "Eval batch size",
+            min_value=1,
+            value=2,
+            key="pairwise_eval_only_batch_size",
+            help="Number of adjacent page pairs per evaluation batch.",
+        )
+        max_length = st.number_input(
+            "Max token length",
+            min_value=64,
+            value=512,
+            key="pairwise_eval_only_max_length",
+            help="Maximum OCR tokens sent to LayoutLMv3 for each page in a pair.",
+        )
+        tesseract_lang = st.text_input(
+            "Tesseract language",
+            value="eng",
+            key="pairwise_eval_only_tesseract_lang",
+        )
+        ocr_num_proc = st.number_input(
+            "OCR workers",
+            min_value=1,
+            max_value=12,
+            value=4,
+            key="pairwise_eval_only_ocr_num_proc",
+        )
+        submitted = st.form_submit_button("Run pairwise evaluation")
+
+    def start_job() -> None:
+        if not _require_existing_file(eval_csv, "Eval CSV"):
+            return
+        if not model_dir.exists() or not model_dir.is_dir():
+            st.error(f"Model directory not found: {model_dir}")
+            return
+
+        _start_pairwise_evaluation_job(
+            PairwiseEvalConfig(
+                eval_csv=eval_csv,
+                model_dir=model_dir,
+                output_dir=output_dir,
+                eval_batch_size=int(eval_batch_size),
+                max_length=int(max_length),
+                tesseract_lang=tesseract_lang,
+                ocr_num_proc=int(ocr_num_proc),
+            ),
+            model_dir=model_dir,
+        )
+
+    if submitted:
+        start_job()
+    else:
+        _render_saved_result("pairwise_eval", _render_pairwise_eval_result)
+
+    _render_training_job_controls("pairwise_eval_job", start_job)
+    job = _get_training_job("pairwise_eval_job")
+    if job is not None:
+        snapshot = job.snapshot()
+        if snapshot["status"] == "completed" and snapshot.get("result") is not None:
+            _save_step_result("pairwise_eval", "Pairwise evaluation complete.", snapshot["result"])
+            _render_pairwise_eval_result(snapshot["result"])
+
+
 def _baseline_predict_tab() -> None:
     st.subheader("Baseline Prediction")
     st.caption("Run page-level START/MIDDLE/END/SINGLE prediction on a merged PDF.")
@@ -1084,6 +1201,7 @@ def main() -> None:
             "Train Baseline",
             "Train Pairwise",
             "Train Lightweight",
+            "Evaluate Pairwise",
             "Predict Baseline",
             "Predict Pairwise",
             "Predict Lightweight",
@@ -1103,10 +1221,12 @@ def main() -> None:
     with tabs[5]:
         _lightweight_pairwise_train_tab()
     with tabs[6]:
-        _baseline_predict_tab()
+        _pairwise_eval_tab()
     with tabs[7]:
-        _pairwise_predict_tab()
+        _baseline_predict_tab()
     with tabs[8]:
+        _pairwise_predict_tab()
+    with tabs[9]:
         _lightweight_pairwise_predict_tab()
 
 

@@ -48,6 +48,18 @@ def _build_parser() -> argparse.ArgumentParser:
     pairwise_train_parser.add_argument("--ocr-num-proc", type=int, default=1)
     pairwise_train_parser.add_argument("--classifier-dropout", type=float, default=0.1)
 
+    pairwise_eval_parser = subparsers.add_parser(
+        "eval-pairwise",
+        help="Evaluate a saved pairwise same-document model on a pair-label CSV",
+    )
+    pairwise_eval_parser.add_argument("--eval-csv", type=Path, required=True)
+    pairwise_eval_parser.add_argument("--model-dir", type=Path, required=True)
+    pairwise_eval_parser.add_argument("--output-dir", type=Path)
+    pairwise_eval_parser.add_argument("--eval-batch-size", type=int, default=2)
+    pairwise_eval_parser.add_argument("--max-length", type=int, default=512)
+    pairwise_eval_parser.add_argument("--tesseract-lang", default="eng")
+    pairwise_eval_parser.add_argument("--ocr-num-proc", type=int, default=1)
+
     lightweight_pairwise_train_parser = subparsers.add_parser(
         "train-lightweight-pairwise",
         help="Train a CPU-friendly sentence-embedding pairwise boundary model",
@@ -163,6 +175,25 @@ def _run_train_pairwise(args: argparse.Namespace) -> None:
         classifier_dropout=args.classifier_dropout,
     )
     train_pairwise_model(config)
+
+
+def _run_eval_pairwise(args: argparse.Namespace) -> None:
+    from .pairwise_train import PairwiseEvalConfig, evaluate_pairwise_model
+
+    metrics = evaluate_pairwise_model(
+        PairwiseEvalConfig(
+            eval_csv=args.eval_csv,
+            model_dir=args.model_dir,
+            output_dir=args.output_dir,
+            eval_batch_size=args.eval_batch_size,
+            max_length=args.max_length,
+            tesseract_lang=args.tesseract_lang,
+            ocr_num_proc=args.ocr_num_proc,
+        )
+    )
+    print("Pairwise evaluation metrics:")
+    for key in sorted(metrics):
+        print(f"{key}={metrics[key]:.6f}")
 
 
 def _run_train_lightweight_pairwise(args: argparse.Namespace) -> None:
@@ -297,6 +328,10 @@ def main() -> None:
 
     if args.command == "train-pairwise":
         _run_train_pairwise(args)
+        return
+
+    if args.command == "eval-pairwise":
+        _run_eval_pairwise(args)
         return
 
     if args.command == "train-lightweight-pairwise":

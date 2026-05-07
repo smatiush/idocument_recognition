@@ -32,6 +32,18 @@ class PairwiseTrainConfig:
     classifier_dropout: float = 0.1
 
 
+@dataclass(slots=True)
+class PairwiseEvalConfig:
+    eval_csv: Path
+    model_dir: Path
+    output_dir: Path | None = None
+    eval_batch_size: int = 2
+    max_length: int = 512
+    tesseract_lang: str = "eng"
+    ocr_num_proc: int = 1
+    control_path: Path | None = None
+
+
 def compute_pairwise_metrics(eval_pred: tuple[np.ndarray, np.ndarray]) -> dict[str, float]:
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=-1)
@@ -153,3 +165,85 @@ def train_pairwise_model(config: PairwiseTrainConfig, progress_callback=None) ->
     config.output_dir.mkdir(parents=True, exist_ok=True)
     model.save(config.output_dir, processor)
     return config.output_dir
+
+
+def evaluate_pairwise_model(config: PairwiseEvalConfig, progress_callback=None) -> dict[str, float]:
+    ensure_tesseract_available(tesseract_lang=config.tesseract_lang)
+
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "eval_pairwise",
+                "current": 0,
+                "total": 3,
+                "fraction": 0.05,
+                "message": "Loading saved pairwise model...",
+                "eta_seconds": None,
+            }
+        )
+
+    processor = LayoutLMv3Processor.from_pretrained(str(config.model_dir), apply_ocr=False)
+    model = PairwiseLayoutLMv3Classifier.from_saved(config.model_dir)
+
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "eval_pairwise",
+                "current": 1,
+                "total": 3,
+                "fraction": 0.15,
+                "message": "Encoding pairwise eval dataset with OCR...",
+                "eta_seconds": None,
+            }
+        )
+
+    eval_dataset = encode_pair_dataset(
+        load_pair_csv_dataset(config.eval_csv),
+        processor=processor,
+        max_length=config.max_length,
+        tesseract_lang=config.tesseract_lang,
+        num_proc=config.ocr_num_proc,
+        control_path=config.control_path,
+    )
+
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "eval_pairwise",
+                "current": 2,
+                "total": 3,
+                "fraction": 0.8,
+                "message": "Running pairwise evaluation...",
+                "eta_seconds": None,
+            }
+        )
+
+    output_dir = config.output_dir or (config.model_dir / "eval")
+    args = TrainingArguments(
+        output_dir=str(output_dir),
+        per_device_eval_batch_size=config.eval_batch_size,
+        remove_unused_columns=False,
+        report_to="none",
+    )
+    trainer = Trainer(
+        model=model,
+        args=args,
+        eval_dataset=eval_dataset,
+        data_collator=DefaultDataCollator(),
+        compute_metrics=compute_pairwise_metrics,
+    )
+    metrics = {key: float(value) for key, value in trainer.evaluate().items()}
+
+    if progress_callback is not None:
+        progress_callback(
+            {
+                "phase": "eval_pairwise",
+                "current": 3,
+                "total": 3,
+                "fraction": 1.0,
+                "message": "Pairwise evaluation complete.",
+                "eta_seconds": 0,
+            }
+        )
+
+    return metrics
