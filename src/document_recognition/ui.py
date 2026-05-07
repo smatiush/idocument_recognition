@@ -18,6 +18,7 @@ from document_recognition.lightweight_pairwise import (
     predict_pdf_boundaries_lightweight_pairwise,
     train_lightweight_pairwise_model,
 )
+from document_recognition.labels import PairLabel
 from document_recognition.ocr import OCREnvironmentError
 from document_recognition.pairwise_inference import predict_pdf_boundaries_pairwise
 from document_recognition.pairwise_train import (
@@ -26,6 +27,7 @@ from document_recognition.pairwise_train import (
     evaluate_pairwise_model,
     train_pairwise_model,
 )
+from document_recognition.postprocess import ranges_to_page_labels
 from document_recognition.source_validation import SourceValidationConfig, validate_source_pdfs
 from document_recognition.synthetic import SyntheticDatasetConfig, create_synthetic_merged_dataset
 from document_recognition.train import TrainConfig, train_model
@@ -177,6 +179,75 @@ def _render_pairwise_prediction_result(data: dict[str, object]) -> None:
     st.write("Document ranges")
     _render_ranges(data["ranges"])
     _render_split_paths(data["output_pdfs"])
+
+
+def _ranges_from_pair_labels(pair_labels: list[str]) -> list[tuple[int, int]]:
+    if not pair_labels:
+        return [(1, 1)]
+
+    ranges: list[tuple[int, int]] = []
+    start_page = 1
+    for left_page, label in enumerate(pair_labels, start=1):
+        if label == PairLabel.NEW_DOCUMENT.value:
+            ranges.append((start_page, left_page))
+            start_page = left_page + 1
+    ranges.append((start_page, len(pair_labels) + 1))
+    return ranges
+
+
+def _pair_review_metrics(rows: list[dict[str, object]]) -> dict[str, float]:
+    total = len(rows)
+    if total == 0:
+        return {
+            "reviewed_pairs": 0.0,
+            "accuracy": 0.0,
+            "boundary_precision": 0.0,
+            "boundary_recall": 0.0,
+        }
+
+    correct = sum(1 for row in rows if row["model_label"] == row["human_label"])
+    predicted_boundary = [row for row in rows if row["model_label"] == PairLabel.NEW_DOCUMENT.value]
+    actual_boundary = [row for row in rows if row["human_label"] == PairLabel.NEW_DOCUMENT.value]
+    true_boundary = [
+        row
+        for row in rows
+        if row["model_label"] == PairLabel.NEW_DOCUMENT.value and row["human_label"] == PairLabel.NEW_DOCUMENT.value
+    ]
+    return {
+        "reviewed_pairs": float(total),
+        "accuracy": correct / total,
+        "boundary_precision": len(true_boundary) / max(len(predicted_boundary), 1),
+        "boundary_recall": len(true_boundary) / max(len(actual_boundary), 1),
+    }
+
+
+def _coerce_review_rows(edited_rows) -> list[dict[str, object]]:
+    if hasattr(edited_rows, "to_dict"):
+        records = edited_rows.to_dict("records")
+    else:
+        records = edited_rows
+    return [dict(row) for row in records]
+
+
+def _write_pair_review_csv(rows: list[dict[str, object]], output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "left_page",
+        "right_page",
+        "left_image_path",
+        "right_image_path",
+        "label",
+        "model_label",
+        "human_label",
+        "same_document_probability",
+    ]
+    with output_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            output_row = {field: row.get(field, "") for field in fieldnames}
+            output_row["label"] = row.get("human_label", "")
+            writer.writerow(output_row)
 
 
 def _render_pairwise_eval_result(data: dict[str, object]) -> None:
@@ -1100,6 +1171,125 @@ def _pairwise_predict_tab() -> None:
         _render_saved_result("pairwise_predict", _render_pairwise_prediction_result)
 
 
+def _pairwise_human_review_tab() -> None:
+    st.subheader("Pairwise Human Review")
+    st.caption("Review and correct adjacent-page boundary decisions from a saved pairwise model.")
+
+    with st.form("pairwise_human_review_form"):
+        pdf_path = _path_input("Merged PDF path", "pairwise_review_pdf_path", "samples/merged.pdf")
+        model_dir = _path_input("Model directory", "pairwise_review_model_dir", "artifacts/layoutlmv3-pairwise")
+        work_dir = _path_input("Work directory", "pairwise_review_work_dir", "artifacts/review/pairwise")
+        dpi = st.number_input("Render DPI", min_value=72, value=200, key="pairwise_review_dpi")
+        max_length = st.number_input("Max token length", min_value=64, value=512, key="pairwise_review_max_length")
+        threshold = st.number_input(
+            "New-document threshold",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.5,
+            key="pairwise_review_threshold",
+        )
+        tesseract_lang = st.text_input("Tesseract language", value="eng", key="pairwise_review_tesseract_lang")
+        submitted = st.form_submit_button("Run prediction for review")
+
+    if submitted:
+        if not _require_existing_file(pdf_path, "Merged PDF"):
+            return
+        if not model_dir.exists() or not model_dir.is_dir():
+            st.error(f"Model directory not found: {model_dir}")
+            return
+
+        try:
+            with st.spinner("Running pairwise prediction for human review..."):
+                result = predict_pdf_boundaries_pairwise(
+                    pdf_path=pdf_path,
+                    model_dir=model_dir,
+                    work_dir=work_dir,
+                    dpi=int(dpi),
+                    max_length=int(max_length),
+                    tesseract_lang=tesseract_lang,
+                    threshold=float(threshold),
+                    split_output=False,
+                )
+        except OCREnvironmentError as exc:
+            st.error(str(exc))
+            return
+        except Exception as exc:
+            st.error(f"{type(exc).__name__}: {exc}")
+            return
+
+        page_dir = work_dir / "pages"
+        review_rows = [
+            {
+                "left_page": prediction.left_page,
+                "right_page": prediction.right_page,
+                "left_image_path": str(page_dir / f"page_{prediction.left_page:04d}.png"),
+                "right_image_path": str(page_dir / f"page_{prediction.right_page:04d}.png"),
+                "same_document_probability": round(prediction.same_document_probability, 4),
+                "model_label": prediction.label,
+                "human_label": prediction.label,
+            }
+            for prediction in result.pair_predictions
+        ]
+        _save_step_result(
+            "pairwise_human_review",
+            "Prediction ready for human review.",
+            {
+                "rows": review_rows,
+                "work_dir": work_dir,
+                "pdf_path": pdf_path,
+            },
+        )
+
+    result = _get_step_result("pairwise_human_review")
+    if result is None:
+        return
+
+    data = result["data"]
+    rows = list(data["rows"])
+    st.success(result["status"])
+    edited_rows = st.data_editor(
+        rows,
+        key="pairwise_human_review_editor",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "human_label": st.column_config.SelectboxColumn(
+                "human_label",
+                options=[PairLabel.SAME_DOCUMENT.value, PairLabel.NEW_DOCUMENT.value],
+                required=True,
+            ),
+            "model_label": st.column_config.TextColumn("model_label", disabled=True),
+            "same_document_probability": st.column_config.NumberColumn(
+                "same_document_probability",
+                format="%.4f",
+                disabled=True,
+            ),
+            "left_image_path": st.column_config.TextColumn("left_image_path", disabled=True),
+            "right_image_path": st.column_config.TextColumn("right_image_path", disabled=True),
+        },
+    )
+
+    reviewed_rows = _coerce_review_rows(edited_rows)
+    metrics = _pair_review_metrics(reviewed_rows)
+    st.write("Review metrics")
+    st.write(metrics)
+
+    human_pair_labels = [str(row["human_label"]) for row in reviewed_rows]
+    corrected_ranges = _ranges_from_pair_labels(human_pair_labels)
+    corrected_page_labels = ranges_to_page_labels(corrected_ranges, total_pages=len(human_pair_labels) + 1)
+    st.write("Corrected document ranges")
+    _render_ranges(corrected_ranges)
+    st.write("Corrected page labels")
+    st.write(
+        [{"page": page_number, "label": label} for page_number, label in enumerate(corrected_page_labels, start=1)]
+    )
+
+    output_path = Path(str(data["work_dir"])) / "human_review_pair_labels.csv"
+    if st.button("Write reviewed pair-label CSV", key="pairwise_human_review_write_csv"):
+        _write_pair_review_csv(reviewed_rows, output_path)
+        st.success(f"Reviewed CSV written to {output_path}")
+
+
 def _lightweight_pairwise_predict_tab() -> None:
     st.subheader("Lightweight Pairwise Prediction")
     st.caption("Run the CPU-friendly adjacent-page boundary model and reconstruct document ranges.")
@@ -1219,6 +1409,7 @@ def main() -> None:
             "Evaluate Pairwise",
             "Predict Baseline",
             "Predict Pairwise",
+            "Review Pairwise",
             "Predict Lightweight",
         ]
     )
@@ -1242,6 +1433,8 @@ def main() -> None:
     with tabs[8]:
         _pairwise_predict_tab()
     with tabs[9]:
+        _pairwise_human_review_tab()
+    with tabs[10]:
         _lightweight_pairwise_predict_tab()
 
 

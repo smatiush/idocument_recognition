@@ -63,6 +63,7 @@ The UI includes tabs for:
 - saved pairwise model evaluation
 - baseline prediction
 - pairwise prediction
+- human review of pairwise predictions
 - lightweight CPU pairwise prediction
 
 The recommended flow for raw PDF collections is:
