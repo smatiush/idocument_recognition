@@ -42,7 +42,16 @@ class TrainingJob:
         self.fraction = 0.0
         self.eta_seconds = None
         self.error = ""
+        self.logs: list[str] = ["Starting job..."]
         self.thread: threading.Thread | None = None
+
+    def _append_log_locked(self, message: str) -> None:
+        self.logs.append(message)
+        self.logs = self.logs[-200:]
+
+    def append_log(self, message: str) -> None:
+        with self.lock:
+            self._append_log_locked(message)
 
     def update_progress(self, event: dict[str, object]) -> None:
         with self.lock:
@@ -50,6 +59,12 @@ class TrainingJob:
             self.message = str(event.get("message", "Working..."))
             self.fraction = max(0.0, min(float(event.get("fraction", 0.0)), 1.0))
             self.eta_seconds = event.get("eta_seconds")
+            current = event.get("current")
+            total = event.get("total")
+            phase = event.get("phase")
+            prefix = f"[{phase}] " if phase else ""
+            suffix = f" ({current}/{total})" if current is not None and total is not None else ""
+            self._append_log_locked(f"{prefix}{self.message}{suffix}")
 
     def set_status(self, status: str, message: str, fraction: float | None = None) -> None:
         with self.lock:
@@ -57,12 +72,14 @@ class TrainingJob:
             self.message = message
             if fraction is not None:
                 self.fraction = max(0.0, min(fraction, 1.0))
+            self._append_log_locked(f"[{status}] {message}")
 
     def set_error(self, message: str) -> None:
         with self.lock:
             self.status = "failed"
             self.error = message
             self.message = message
+            self._append_log_locked(f"[failed] {message}")
 
     def snapshot(self) -> dict[str, object]:
         with self.lock:
@@ -75,6 +92,7 @@ class TrainingJob:
                 "fraction": self.fraction,
                 "eta_seconds": self.eta_seconds,
                 "error": self.error,
+                "logs": list(self.logs),
                 "alive": self.thread.is_alive() if self.thread is not None else False,
             }
 
@@ -209,6 +227,17 @@ def _render_training_job_controls(job_key: str, start_job) -> None:
     if snapshot["error"]:
         st.error(str(snapshot["error"]))
 
+    with st.expander("Training log", expanded=True):
+        logs = snapshot.get("logs", [])
+        st.text_area(
+            "Recent events",
+            value="\n".join(str(line) for line in logs),
+            height=220,
+            key=f"{job_key}_logs",
+            disabled=True,
+            label_visibility="collapsed",
+        )
+
     cols = st.columns(4)
     with cols[0]:
         if st.button("Play", key=f"{job_key}_play", disabled=status not in {"paused", "stopping"}):
@@ -241,6 +270,7 @@ def _start_baseline_training_job(config: TrainConfig, output_dir: Path) -> Train
 
     def target() -> None:
         try:
+            job.append_log("Loading baseline model and preparing OCR dataset...")
             train_model(config, progress_callback=_make_job_progress_callback(job))
         except TrainingStoppedError as exc:
             job.set_status("stopped", str(exc))
@@ -269,6 +299,9 @@ def _start_pairwise_training_job(config: PairwiseTrainConfig, output_dir: Path) 
 
     def target() -> None:
         try:
+            job.append_log("Loading LayoutLMv3 processor and pairwise model...")
+            job.append_log("If this is the first run, Hugging Face model download can take several minutes.")
+            job.append_log("After model loading, OCR and dataset encoding will start.")
             train_pairwise_model(config, progress_callback=_make_job_progress_callback(job))
         except TrainingStoppedError as exc:
             job.set_status("stopped", str(exc))
@@ -297,6 +330,8 @@ def _start_lightweight_pairwise_training_job(config: LightweightPairwiseTrainCon
 
     def target() -> None:
         try:
+            job.append_log("Preparing OCR text pairs for lightweight training...")
+            job.append_log("If this is the first run, the sentence-transformer model will be downloaded.")
             train_lightweight_pairwise_model(config, progress_callback=_make_job_progress_callback(job))
         except TrainingStoppedError as exc:
             job.set_status("stopped", str(exc))
