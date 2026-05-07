@@ -33,6 +33,10 @@ class PairwiseTrainConfig:
     ocr_num_proc: int = 1
     control_path: Path | None = None
     classifier_dropout: float = 0.1
+    fp16: bool = False
+    dataloader_num_workers: int = 0
+    gradient_accumulation_steps: int = 1
+    encoded_cache_dir: Path | None = None
 
 
 @dataclass(slots=True)
@@ -93,6 +97,54 @@ def _encoded_eval_cache_dir(config: PairwiseEvalConfig) -> Path | None:
     }
     cache_key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
     return config.output_dir / "encoded_eval_cache" / cache_key
+
+
+def _encoded_train_cache_dir(config: PairwiseTrainConfig, split_name: str) -> Path | None:
+    if config.encoded_cache_dir is None:
+        return None
+
+    csv_path = config.train_csv if split_name == "train" else config.eval_csv
+    resolved_csv = csv_path.resolve()
+    stat = resolved_csv.stat()
+    payload = {
+        "csv": str(resolved_csv),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "pretrained_model_name": config.pretrained_model_name,
+        "max_length": config.max_length,
+        "tesseract_lang": config.tesseract_lang,
+        "split_name": split_name,
+    }
+    cache_key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    return config.encoded_cache_dir / split_name / cache_key
+
+
+def _load_or_encode_pairwise_train_dataset(
+    config: PairwiseTrainConfig,
+    processor: LayoutLMv3Processor,
+    *,
+    split_name: str,
+) -> Dataset:
+    cache_dir = _encoded_train_cache_dir(config, split_name)
+    if cache_dir is not None and cache_dir.exists():
+        dataset = load_from_disk(str(cache_dir))
+        dataset.set_format("torch")
+        return dataset
+
+    csv_path = config.train_csv if split_name == "train" else config.eval_csv
+    dataset = encode_pair_dataset(
+        load_pair_csv_dataset(csv_path),
+        processor=processor,
+        max_length=config.max_length,
+        tesseract_lang=config.tesseract_lang,
+        num_proc=config.ocr_num_proc,
+        control_path=config.control_path,
+    )
+    if cache_dir is not None:
+        cache_dir.parent.mkdir(parents=True, exist_ok=True)
+        dataset.save_to_disk(str(cache_dir))
+        dataset.set_format("torch")
+    return dataset
 
 
 def _load_or_encode_pairwise_eval_dataset(
@@ -209,22 +261,8 @@ def train_pairwise_model(config: PairwiseTrainConfig, progress_callback=None) ->
         classifier_dropout=config.classifier_dropout,
     )
 
-    train_dataset = encode_pair_dataset(
-        load_pair_csv_dataset(config.train_csv),
-        processor=processor,
-        max_length=config.max_length,
-        tesseract_lang=config.tesseract_lang,
-        num_proc=config.ocr_num_proc,
-        control_path=config.control_path,
-    )
-    eval_dataset = encode_pair_dataset(
-        load_pair_csv_dataset(config.eval_csv),
-        processor=processor,
-        max_length=config.max_length,
-        tesseract_lang=config.tesseract_lang,
-        num_proc=config.ocr_num_proc,
-        control_path=config.control_path,
-    )
+    train_dataset = _load_or_encode_pairwise_train_dataset(config, processor, split_name="train")
+    eval_dataset = _load_or_encode_pairwise_train_dataset(config, processor, split_name="eval")
 
     args = TrainingArguments(
         output_dir=str(config.output_dir),
@@ -232,10 +270,13 @@ def train_pairwise_model(config: PairwiseTrainConfig, progress_callback=None) ->
         per_device_train_batch_size=config.train_batch_size,
         per_device_eval_batch_size=config.eval_batch_size,
         num_train_epochs=config.num_train_epochs,
+        gradient_accumulation_steps=config.gradient_accumulation_steps,
         eval_strategy="epoch",
         save_strategy="no",
         logging_steps=config.logging_steps,
         remove_unused_columns=False,
+        fp16=config.fp16,
+        dataloader_num_workers=config.dataloader_num_workers,
         report_to="none",
     )
 

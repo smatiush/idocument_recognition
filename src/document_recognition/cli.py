@@ -60,6 +60,10 @@ def _build_parser() -> argparse.ArgumentParser:
     pairwise_train_parser.add_argument("--tesseract-lang", default="eng")
     pairwise_train_parser.add_argument("--ocr-num-proc", type=int, default=1)
     pairwise_train_parser.add_argument("--classifier-dropout", type=float, default=0.1)
+    pairwise_train_parser.add_argument("--fp16", action="store_true")
+    pairwise_train_parser.add_argument("--dataloader-num-workers", type=int, default=0)
+    pairwise_train_parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
+    pairwise_train_parser.add_argument("--encoded-cache-dir", type=Path)
 
     pairwise_eval_parser = subparsers.add_parser(
         "eval-pairwise",
@@ -231,6 +235,10 @@ def _run_train_pairwise(args: argparse.Namespace) -> None:
         tesseract_lang=args.tesseract_lang,
         ocr_num_proc=args.ocr_num_proc,
         classifier_dropout=args.classifier_dropout,
+        fp16=args.fp16,
+        dataloader_num_workers=args.dataloader_num_workers,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        encoded_cache_dir=args.encoded_cache_dir,
     )
     train_pairwise_model(config)
 
