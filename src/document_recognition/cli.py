@@ -142,6 +142,40 @@ def _build_parser() -> argparse.ArgumentParser:
     lightweight_pairwise_predict_parser.add_argument("--threshold", type=float, default=0.7)
     lightweight_pairwise_predict_parser.add_argument("--no-split-output", action="store_true")
 
+    packet_split_parser = subparsers.add_parser(
+        "split-packet",
+        help="Split a merged PDF packet with all-pairs page clustering and JSON output",
+    )
+    packet_split_parser.add_argument("--pdf-path", type=Path, required=True)
+    packet_split_parser.add_argument("--work-dir", type=Path, required=True)
+    packet_split_parser.add_argument(
+        "--model-dir",
+        type=Path,
+        help="Optional lightweight pairwise model directory. If omitted, uses heuristic text similarity.",
+    )
+    packet_split_parser.add_argument("--dpi", type=int, default=200)
+    packet_split_parser.add_argument("--tesseract-lang", default="eng")
+    packet_split_parser.add_argument("--ocr-engine", choices=["tesseract", "easyocr"], default="tesseract")
+    packet_split_parser.add_argument("--ocr-gpu", action="store_true")
+    packet_split_parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.75,
+        help="Minimum same-document probability needed to connect two pages in the same cluster.",
+    )
+    packet_split_parser.add_argument(
+        "--review-margin",
+        type=float,
+        default=0.1,
+        help="Flag pair decisions this close to the threshold for human review.",
+    )
+    packet_split_parser.add_argument("--no-split-output", action="store_true")
+    packet_split_parser.add_argument(
+        "--output-json",
+        type=Path,
+        help="Optional path where the packet JSON result should be written.",
+    )
+
     return parser
 
 
@@ -390,6 +424,30 @@ def _run_predict_lightweight_pairwise(args: argparse.Namespace) -> None:
             print(path)
 
 
+def _run_split_packet(args: argparse.Namespace) -> None:
+    from .packet_splitter import split_document_packet
+
+    result = split_document_packet(
+        pdf_path=args.pdf_path,
+        work_dir=args.work_dir,
+        model_dir=args.model_dir,
+        dpi=args.dpi,
+        tesseract_lang=args.tesseract_lang,
+        ocr_engine=args.ocr_engine,
+        ocr_gpu=args.ocr_gpu,
+        threshold=args.threshold,
+        review_margin=args.review_margin,
+        split_output=not args.no_split_output,
+    )
+    payload = result.to_json()
+    if args.output_json is not None:
+        args.output_json.parent.mkdir(parents=True, exist_ok=True)
+        args.output_json.write_text(payload + "\n", encoding="utf-8")
+        print(f"packet_json={args.output_json}")
+    else:
+        print(payload)
+
+
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
@@ -424,6 +482,10 @@ def main() -> None:
 
     if args.command == "predict-lightweight-pairwise":
         _run_predict_lightweight_pairwise(args)
+        return
+
+    if args.command == "split-packet":
+        _run_split_packet(args)
         return
 
     raise ValueError(f"Unsupported command: {args.command}")

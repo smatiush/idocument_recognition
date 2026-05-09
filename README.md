@@ -292,3 +292,57 @@ document-recognition predict-lightweight-pairwise \
   --work-dir artifacts/inference/lightweight-pairwise \
   --threshold 0.7
 ```
+
+## Split A Document Packet
+
+Use `split-packet` when pages may be mixed and adjacent boundary detection is
+not enough. It scores every page pair, builds a same-document graph, clusters
+connected pages, orders pages inside each cluster, classifies the document type
+with simple OCR-text heuristics, and returns a JSON packet.
+
+With a trained lightweight pairwise model:
+
+```bash
+document-recognition split-packet \
+  --pdf-path samples/merged.pdf \
+  --model-dir artifacts/lightweight-pairwise \
+  --work-dir artifacts/inference/packet \
+  --threshold 0.75 \
+  --output-json artifacts/inference/packet/result.json
+```
+
+For a smoke test before training a model, omit `--model-dir` to use heuristic
+text similarity:
+
+```bash
+document-recognition split-packet \
+  --pdf-path samples/merged.pdf \
+  --work-dir artifacts/inference/packet-heuristic \
+  --threshold 0.75
+```
+
+The output has this shape:
+
+```json
+{
+  "documents": [
+    {
+      "doc_id": "doc_1",
+      "doc_type": "invoice",
+      "confidence": 0.91,
+      "pages": [1, 3, 5]
+    }
+  ],
+  "needs_human_review": true,
+  "review_signals": [
+    {
+      "boundary": [4, 5],
+      "confidence": 0.74,
+      "decision": "uncertain",
+      "reason": "pairwise same-document score is close to the clustering threshold"
+    }
+  ],
+  "pair_relations": [],
+  "output_pdfs": []
+}
+```

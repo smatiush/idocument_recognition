@@ -9,11 +9,30 @@ import torch
 from torch import nn
 from transformers import LayoutLMv3Config, LayoutLMv3Model, LayoutLMv3Processor
 
+REQUIRED_PAIRWISE_ARTIFACT_FILES = (
+    "pairwise_model.pt",
+    "pairwise_model_config.json",
+    "preprocessor_config.json",
+    "tokenizer_config.json",
+    "vocab.json",
+    "merges.txt",
+)
+
 
 @dataclass(slots=True)
 class PairwiseModelConfig:
     backbone_config: dict[str, Any]
     classifier_dropout: float = 0.1
+
+
+def validate_pairwise_model_artifact(model_dir: str | Path) -> None:
+    model_dir = Path(model_dir)
+    missing_files = [name for name in REQUIRED_PAIRWISE_ARTIFACT_FILES if not (model_dir / name).is_file()]
+    if missing_files:
+        missing = ", ".join(missing_files)
+        raise FileNotFoundError(f"Incomplete pairwise model artifact at {model_dir}: missing {missing}")
+
+    LayoutLMv3Processor.from_pretrained(str(model_dir), apply_ocr=False)
 
 
 class PairwiseLayoutLMv3Classifier(nn.Module):
@@ -45,6 +64,7 @@ class PairwiseLayoutLMv3Classifier(nn.Module):
     @classmethod
     def from_saved(cls, model_dir: str | Path) -> "PairwiseLayoutLMv3Classifier":
         model_dir = Path(model_dir)
+        validate_pairwise_model_artifact(model_dir)
         with (model_dir / "pairwise_model_config.json").open("r", encoding="utf-8") as file:
             config = PairwiseModelConfig(**json.load(file))
 
@@ -57,14 +77,18 @@ class PairwiseLayoutLMv3Classifier(nn.Module):
     def save(self, model_dir: str | Path, processor: LayoutLMv3Processor) -> None:
         model_dir = Path(model_dir)
         model_dir.mkdir(parents=True, exist_ok=True)
-        torch.save(self.state_dict(), model_dir / "pairwise_model.pt")
-        processor.save_pretrained(str(model_dir))
         config = PairwiseModelConfig(
             backbone_config=self.backbone.config.to_dict(),
             classifier_dropout=self.dropout.p,
         )
+
+        torch.save(self.state_dict(), model_dir / "pairwise_model.pt")
         with (model_dir / "pairwise_model_config.json").open("w", encoding="utf-8") as file:
             json.dump(asdict(config), file, indent=2)
+        processor.save_pretrained(str(model_dir))
+        processor.image_processor.save_pretrained(str(model_dir))
+        processor.tokenizer.save_pretrained(str(model_dir))
+        validate_pairwise_model_artifact(model_dir)
 
     def _encode_page(
         self,
